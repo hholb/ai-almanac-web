@@ -33,8 +33,20 @@ def _docker_cmd(job_id: str, config: dict) -> list[str]:
     nc_mask_host = romp_params.get("nc_mask")
     if nc_mask_host:
         mask_host_path = Path(nc_mask_host).resolve()
-        extra_mounts = ["-v", f"{mask_host_path.parent}:/data/masks:ro"]
+        extra_mounts += ["-v", f"{mask_host_path.parent}:/data/masks:ro"]
         romp_params["nc_mask"] = f"/data/masks/{mask_host_path.name}"
+
+    ref_model_dir_host = romp_params.get("ref_model_dir")
+    if ref_model_dir_host:
+        rmd = Path(ref_model_dir_host).resolve()
+        extra_mounts += ["-v", f"{rmd}:/data/ref_model:ro"]
+        romp_params["ref_model_dir"] = "/data/ref_model"
+
+    thresh_file_host = romp_params.get("thresh_file")
+    if thresh_file_host:
+        tf = Path(thresh_file_host).resolve()
+        extra_mounts += ["-v", f"{tf.parent}:/data/thresh:ro"]
+        romp_params["thresh_file"] = f"/data/thresh/{tf.name}"
 
     env = {
         "ROMP_OBS_DIR":    "/data/obs",

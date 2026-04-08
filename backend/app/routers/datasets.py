@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
 from ..auth import CurrentUser
-from ..config import settings
+from ..config import settings, get_demo_datasets
 from ..database import get_db
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -21,10 +21,11 @@ class DatasetOut(BaseModel):
     id: str
     name: str
     status: str
-    storage_key: str | None
+    storage_key: str | None = None
     created_at: str
-    ready_at: str | None
-    error: str | None
+    ready_at: str | None = None
+    error: str | None = None
+    is_demo: bool = False
 
 
 class UploadUrlRequest(BaseModel):
@@ -99,7 +100,20 @@ async def list_datasets(user: CurrentUser):
             ).fetchall()]
 
     rows = await asyncio.to_thread(_list)
-    return [DatasetOut(**r) for r in rows]
+    user_datasets = [DatasetOut(**r) for r in rows]
+
+    demo_datasets = [
+        DatasetOut(
+            id=d["id"],
+            name=d["name"],
+            status="ready",
+            created_at="",
+            is_demo=True,
+        )
+        for d in get_demo_datasets()
+    ]
+
+    return demo_datasets + user_datasets
 
 
 @router.post("/from-path", response_model=DatasetOut, status_code=status.HTTP_201_CREATED)

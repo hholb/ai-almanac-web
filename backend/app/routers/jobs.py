@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from ..auth import CurrentUser
-from ..config import settings
+from ..config import settings, get_model_registry, get_demo_datasets
 from ..database import get_db
 from ..services.docker_runner import run_job
 
@@ -44,13 +44,14 @@ class RompParams(BaseModel):
     ref_model: str | None = None
     init_days: str | None = None
     nc_mask: str | None = None
+    ref_model_dir: str | None = None
+    thresh_file: str | None = None
 
 
 class JobCreate(BaseModel):
     dataset_id: str
     model_name: str
     obs_dir: str | None = None
-    model_dir: str
     params: RompParams = RompParams()
 
 
@@ -59,6 +60,9 @@ class JobOut(BaseModel):
     dataset_id: str
     status: str
     model_name: str
+    model_dir: str | None = None
+    obs_dir: str | None = None
+    params: dict | None = None
     created_at: str
     started_at: str | None
     completed_at: str | None
@@ -82,6 +86,9 @@ def _row_to_job_out(row: dict) -> JobOut:
         dataset_id=row["dataset_id"],
         status=row["status"],
         model_name=cfg.get("model_name", ""),
+        model_dir=cfg.get("model_dir"),
+        obs_dir=cfg.get("obs_dir"),
+        params=cfg.get("romp_params") or None,
         created_at=row["created_at"],
         started_at=row.get("started_at"),
         completed_at=row.get("completed_at"),
@@ -92,10 +99,17 @@ def _row_to_job_out(row: dict) -> JobOut:
 def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str:
     if obs_dir_override:
         return obs_dir_override
+    # Demo datasets are resolved from config, not the DB.
+    if dataset_id.startswith("demo:"):
+        demo_map = {d["id"]: d["obs_dir"] for d in get_demo_datasets()}
+        obs_dir = demo_map.get(dataset_id)
+        if not obs_dir:
+            raise HTTPException(status_code=400, detail=f"Unknown demo dataset: {dataset_id!r}")
+        return obs_dir
     with get_db() as conn:
         row = conn.execute("SELECT storage_key FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
     if not row or not row["storage_key"]:
-        raise HTTPException(status_code=400, detail="Dataset has no storage_key; provide obs_dir explicitly")
+        raise HTTPException(status_code=400, detail="Dataset has no storage_key")
     key = row["storage_key"]
     # from-path datasets store the absolute directory directly as storage_key
     if Path(key).is_absolute():
@@ -108,31 +122,55 @@ def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str:
 # Routes
 # ---------------------------------------------------------------------------
 
+@router.get("/models")
+async def list_models():
+    """Return available model configurations for the UI."""
+    return get_model_registry()
+
+
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 async def create_job(body: JobCreate, user: CurrentUser):
-    def _check_dataset():
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT * FROM datasets WHERE id = ? AND user_id = ?",
-                (body.dataset_id, user["id"]),
-            ).fetchone()
-            return dict(row) if row else None
+    if body.dataset_id.startswith("demo:"):
+        demo_map = {d["id"]: d for d in get_demo_datasets()}
+        if body.dataset_id not in demo_map:
+            raise HTTPException(status_code=404, detail=f"Unknown demo dataset: {body.dataset_id!r}")
+    else:
+        def _check_dataset():
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT * FROM datasets WHERE id = ? AND user_id = ?",
+                    (body.dataset_id, user["id"]),
+                ).fetchone()
+                return dict(row) if row else None
 
-    ds = await asyncio.to_thread(_check_dataset)
-    if not ds:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    if ds["status"] != "ready":
-        raise HTTPException(status_code=409, detail=f"Dataset is not ready (status: {ds['status']})")
+        ds = await asyncio.to_thread(_check_dataset)
+        if not ds:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        if ds["status"] != "ready":
+            raise HTTPException(status_code=409, detail=f"Dataset is not ready (status: {ds['status']})")
+
+    registry = {m["id"]: m for m in get_model_registry()}
+    model_cfg = registry.get(body.model_name)
+    if not model_cfg:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {body.model_name!r}")
 
     obs_dir = await asyncio.to_thread(_resolve_obs_dir, body.dataset_id, body.obs_dir)
 
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
+
+    # Start from user-submitted params; inject registry-only fields the frontend
+    # doesn't expose (e.g. date_filter_year for fixed IFS/AIFS init schedules).
+    romp_params = body.params.model_dump(exclude_none=True)
+    for key in ("date_filter_year",):
+        if key not in romp_params and model_cfg.get(key) is not None:
+            romp_params[key] = model_cfg[key]
+
     config = {
         "model_name": body.model_name,
         "obs_dir":    obs_dir,
-        "model_dir":  body.model_dir,
-        "romp_params": body.params.model_dump(exclude_none=True),
+        "model_dir":  model_cfg["model_dir"],
+        "romp_params": romp_params,
     }
 
     def _insert():
