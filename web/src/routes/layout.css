@@ -1,21 +1,21 @@
-@import 'tailwindcss';
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
 
 :root {
-  --color-bg: #060e1a;
-  --color-surface: #0d1a2d;
-  --color-surface-raised: #12223a;
-  --color-border: #1a3050;
-  --color-border-subtle: #122440;
-  --color-text: #dce9f4;
-  --color-text-muted: #6d90b0;
-  --color-text-dim: #3a5d7d;
+  --color-bg: #0e1f34;
+  --color-surface: #162b45;
+  --color-surface-raised: #1d3554;
+  --color-border: #2b4f74;
+  --color-border-subtle: #1f3f60;
+  --color-text: #e8f1fa;
+  --color-text-muted: #82a8c8;
+  --color-text-dim: #527898;
   --color-accent: #d4933f;
   --color-accent-hover: #eaab52;
-  --color-accent-light: rgba(212, 147, 63, 0.12);
-  --color-accent-glow: rgba(212, 147, 63, 0.06);
-  --color-accent-border: rgba(212, 147, 63, 0.25);
-  --color-bg-glass: rgba(6, 14, 26, 0.88);
+  --color-accent-light: rgba(212, 147, 63, 0.14);
+  --color-accent-glow: rgba(212, 147, 63, 0.07);
+  --color-accent-border: rgba(212, 147, 63, 0.3);
+  --color-bg-glass: rgba(14, 31, 52, 0.88);
   --color-danger: #f87171;
   --color-danger-border: rgba(248, 113, 113, 0.35);
   --color-danger-bg: rgba(248, 113, 113, 0.08);
@@ -25,8 +25,8 @@
   --color-status-complete-bg: rgba(52, 211, 153, 0.15);
   --color-status-failed: #f87171;
   --color-status-failed-bg: rgba(248, 113, 113, 0.15);
-  --color-logs-bg: #030912;
-  --color-grid-line: rgba(26, 48, 80, 0.14);
+  --color-logs-bg: #0a1525;
+  --color-grid-line: rgba(43, 79, 116, 0.2);
   --font-display: 'Instrument Serif', Georgia, serif;
   --font-body: 'Manrope', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;

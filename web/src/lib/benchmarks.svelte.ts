@@ -21,6 +21,8 @@ export class BenchmarkStore {
   resultsPromise = $state<Promise<JobResult[]> | null>(null);
   logsPromise = $state<Promise<string> | null>(null);
 
+  private resultsCache = new Map<string, JobResult[]>();
+
   selectedJob = $derived(this.jobs.find((j) => j.id === this.selectedId) ?? null);
 
   private pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -54,7 +56,15 @@ export class BenchmarkStore {
     this.resultsPromise = null;
     this.logsPromise = null;
     if (job.status === "complete") {
-      this.resultsPromise = getJobResults(job.id);
+      const cached = this.resultsCache.get(job.id);
+      if (cached) {
+        this.resultsPromise = Promise.resolve(cached);
+      } else {
+        this.resultsPromise = getJobResults(job.id).then((results) => {
+          this.resultsCache.set(job.id, results);
+          return results;
+        });
+      }
     } else if (job.status === "failed") {
       this.logsPromise = getJobLogs(job.id).then((d) => d.logs);
     }
@@ -87,8 +97,8 @@ export class BenchmarkStore {
     }
   }
 
-  /** Creates the dataset and submits the job. Returns the new job ID for navigation. */
-  async submitRun(data: RunFormData): Promise<string> {
+  /** Creates the dataset, submits the job, adds it to the list, and selects it. */
+  async submitRun(data: RunFormData): Promise<void> {
     const dataset = await createDatasetFromPath(data.datasetName, data.obsDir);
     const job = await submitJob({
       dataset_id: dataset.id,
@@ -96,7 +106,8 @@ export class BenchmarkStore {
       model_dir: data.modelDir,
       params: data.params,
     });
-    return job.id;
+    this.jobs = [job, ...this.jobs];
+    this.selectJob(job);
   }
 }
 

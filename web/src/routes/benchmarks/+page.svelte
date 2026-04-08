@@ -36,7 +36,7 @@
     submitting = true;
     submitError = null;
     try {
-      const jobId = await store.submitRun({
+      await store.submitRun({
         datasetName: form.datasetName,
         obsDir: form.obsDir,
         modelName: form.modelName,
@@ -51,9 +51,9 @@
           parallel: form.parallel,
         },
       });
-      window.location.href = `/benchmarks?job=${jobId}`;
     } catch (e) {
       submitError = e instanceof Error ? e.message : "Submission failed.";
+    } finally {
       submitting = false;
     }
   }

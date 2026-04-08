@@ -6,5 +6,8 @@ export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
   server: {
     allowedHosts: ["ai-almanac.org"],
+  },
+  preview: {
+    port: 5173,
   }
 });

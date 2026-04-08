@@ -22,6 +22,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const body = await res.text();
     throw new Error(`${init.method ?? "GET"} ${path} failed (${res.status}): ${body}`);
   }
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
   return res.json();
 }
 
@@ -70,12 +73,17 @@ export async function deleteJob(id: string): Promise<void> {
 /**
  * Fetch a result file (figure/output) as an object URL for display.
  * The backend requires auth headers so we can't use a plain <img src=...>.
+ * Results are cached in memory by URL so repeated views don't re-fetch.
  */
+const blobCache = new Map<string, string>();
+
 export async function fetchResultBlob(resultUrl: string): Promise<string> {
+  if (blobCache.has(resultUrl)) return blobCache.get(resultUrl)!;
   const res = await fetch(`${BASE_URL}${resultUrl}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`Failed to fetch result: ${res.status}`);
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
+  const objectUrl = URL.createObjectURL(await res.blob());
+  blobCache.set(resultUrl, objectUrl);
+  return objectUrl;
 }
 
 // ---- Types -------------------------------------------------------------------
