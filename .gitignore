@@ -6,3 +6,5 @@ terraform/.terraform.lock.hcl
 terraform/terraform.tfstate*
 
 .env
+*.db
+job_outputs
