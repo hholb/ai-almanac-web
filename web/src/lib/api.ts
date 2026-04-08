@@ -43,6 +43,10 @@ export async function createDatasetFromPath(name: string, obs_dir: string) {
 
 // ---- Jobs --------------------------------------------------------------------
 
+export async function getModels() {
+  return request<ModelConfig[]>("/jobs/models");
+}
+
 export async function getJobs() {
   return request<Job[]>("/jobs");
 }
@@ -92,7 +96,8 @@ export type Dataset = {
   id: string;
   name: string;
   status: string;
-  obs_dir?: string;
+  is_demo: boolean;
+  created_at: string;
 };
 
 export type JobStatus = "running" | "complete" | "failed";
@@ -102,6 +107,8 @@ export type Job = {
   status: JobStatus;
   dataset_id: string;
   model_name: string;
+  model_dir?: string;
+  obs_dir?: string;
   params?: JobParams;
   created_at?: string;
   started_at?: string;
@@ -110,20 +117,60 @@ export type Job = {
 };
 
 export type JobParams = {
-  start_date: string;
-  end_date: string;
-  start_year_clim: number;
-  end_year_clim: number;
-  region: string;
-  init_days: string;
-  parallel: boolean;
+  // Essential
+  region?: string;
+  start_date?: string;
+  end_date?: string;
+  // Common
+  start_year_clim?: number;
+  end_year_clim?: number;
+  max_forecast_day?: number;
+  init_days?: string;
+  parallel?: boolean;
+  // Advanced — obs overrides
+  obs?: string;
+  obs_file_pattern?: string;
+  obs_var?: string;
+  model_var?: string;
+  file_pattern?: string;
+  // Advanced — wet/dry spell thresholds
+  wet_threshold?: number;
+  wet_init?: number;
+  wet_spell?: number;
+  dry_spell?: number;
+  dry_extent?: number;
+  // Advanced — probabilistic
+  probabilistic?: boolean;
+  members?: string;
+  // Advanced — reference model
+  ref_model?: string;
+  ref_model_dir?: string;
+  // Advanced — masks/thresholds
+  nc_mask?: string;
+  thresh_file?: string;
 };
 
 export type SubmitJobParams = {
   dataset_id: string;
   model_name: string;
-  model_dir: string;
   params: JobParams;
+};
+
+export type ModelConfig = {
+  id: string;
+  display_name: string;
+  model_type: string;
+  model_dir: string;
+  model_var: string;
+  unit_cvt: number | null;
+  file_pattern: string;
+  probabilistic: boolean;
+  members: string | null;
+  init_days: string;
+  start_date: string;
+  end_date: string;
+  start_year_clim: number;
+  end_year_clim: number;
 };
 
 export type JobResult = {

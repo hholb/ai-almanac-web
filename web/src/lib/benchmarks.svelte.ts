@@ -1,16 +1,14 @@
 import {
   getJobs, getJob, getJobResults, getJobLogs, fetchResultBlob,
-  createDatasetFromPath, submitJob, deleteJob,
+  submitJob, deleteJob,
   type Job, type JobResult, type JobParams,
 } from "./api";
 
 export type { Job, JobResult };
 
 export type RunFormData = {
-  datasetName: string;
-  obsDir: string;
+  datasetId: string;
   modelName: string;
-  modelDir: string;
   params: JobParams;
 };
 
@@ -97,13 +95,11 @@ export class BenchmarkStore {
     }
   }
 
-  /** Creates the dataset, submits the job, adds it to the list, and selects it. */
+  /** Submits a job and adds it to the list. */
   async submitRun(data: RunFormData): Promise<void> {
-    const dataset = await createDatasetFromPath(data.datasetName, data.obsDir);
     const job = await submitJob({
-      dataset_id: dataset.id,
+      dataset_id: data.datasetId,
       model_name: data.modelName,
-      model_dir: data.modelDir,
       params: data.params,
     });
     this.jobs = [job, ...this.jobs];

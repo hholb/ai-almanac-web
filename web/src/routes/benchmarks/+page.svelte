@@ -4,12 +4,26 @@
   import LoginPrompt from "$lib/LoginPrompt.svelte";
   import { isAuthenticated } from "$lib/auth-store";
   import { BenchmarkStore, fetchResultBlob } from "$lib/benchmarks.svelte";
+  import { getModels, getDatasets, type ModelConfig, type Dataset } from "$lib/api";
 
   const store = new BenchmarkStore();
 
-  onMount(() => {
+  let models = $state<ModelConfig[]>([]);
+  let datasets = $state<Dataset[]>([]);
+
+  onMount(async () => {
     if (!$isAuthenticated) return;
     store.load($page.url.searchParams.get("job"));
+    const [fetchedModels, fetchedDatasets] = await Promise.allSettled([getModels(), getDatasets()]);
+    if (fetchedModels.status === "fulfilled" && fetchedModels.value.length > 0) {
+      models = fetchedModels.value;
+      applyModelPreset(models[0]);
+    }
+    if (fetchedDatasets.status === "fulfilled") {
+      datasets = fetchedDatasets.value;
+      const first = datasets[0];
+      if (first) form.datasetId = first.id;
+    }
   });
 
   onDestroy(() => store.stopPolling());
@@ -17,38 +31,90 @@
   // ---- Form (local UI state only) --------------------------------------------
 
   let form = $state({
-    datasetName: "demo",
-    obsDir: "/Users/hayden/code/ROMP/demo/data/obs",
-    modelName: "aifs",
-    modelDir: "/Users/hayden/code/ROMP/demo/data/aifs",
+    // Dataset
+    datasetId: "",
+    // Model (populated from registry on mount)
+    modelName: "",
+    // Essential params
+    region: "India",
     startDate: "2015-05-01",
     endDate: "2015-07-31",
+    // Common params
     startYearClim: 2013,
     endYearClim: 2015,
-    region: "India",
+    maxForecastDay: null as number | null,
     initDays: "2,5",
     parallel: false,
+    // Advanced — obs overrides
+    obs: "",
+    obsFilePattern: "",
+    obsVar: "",
+    modelVar: "",
+    filePattern: "",
+    // Advanced — wet/dry
+    wetThreshold: null as number | null,
+    wetInit: null as number | null,
+    wetSpell: null as number | null,
+    drySpell: null as number | null,
+    dryExtent: null as number | null,
+    // Advanced — probabilistic
+    probabilistic: false,
+    members: "",
+    // Advanced — reference model
+    refModel: "",
+    refModelDir: "",
+    // Advanced — masks
+    ncMask: "",
+    threshFile: "",
   });
   let submitting = $state(false);
   let submitError = $state<string | null>(null);
+
+  function applyModelPreset(model: ModelConfig) {
+    form.modelName = model.id;
+    form.startDate = model.start_date;
+    form.endDate = model.end_date;
+    form.startYearClim = model.start_year_clim;
+    form.endYearClim = model.end_year_clim;
+    form.initDays = model.init_days;
+    form.probabilistic = model.probabilistic;
+    form.members = model.members ?? "";
+    form.modelVar = model.model_var !== "tp" ? model.model_var : "";
+    form.filePattern = model.file_pattern !== "{}.nc" ? model.file_pattern : "";
+  }
 
   async function handleSubmit() {
     submitting = true;
     submitError = null;
     try {
       await store.submitRun({
-        datasetName: form.datasetName,
-        obsDir: form.obsDir,
+        datasetId: form.datasetId,
         modelName: form.modelName,
-        modelDir: form.modelDir,
         params: {
+          region: form.region,
           start_date: form.startDate,
           end_date: form.endDate,
           start_year_clim: form.startYearClim,
           end_year_clim: form.endYearClim,
-          region: form.region,
           init_days: form.initDays,
           parallel: form.parallel,
+          ...(form.maxForecastDay != null && { max_forecast_day: form.maxForecastDay }),
+          ...(form.obs            && { obs: form.obs }),
+          ...(form.obsFilePattern && { obs_file_pattern: form.obsFilePattern }),
+          ...(form.obsVar         && { obs_var: form.obsVar }),
+          ...(form.modelVar       && { model_var: form.modelVar }),
+          ...(form.filePattern    && { file_pattern: form.filePattern }),
+          ...(form.wetThreshold != null && { wet_threshold: form.wetThreshold }),
+          ...(form.wetInit      != null && { wet_init: form.wetInit }),
+          ...(form.wetSpell     != null && { wet_spell: form.wetSpell }),
+          ...(form.drySpell     != null && { dry_spell: form.drySpell }),
+          ...(form.dryExtent    != null && { dry_extent: form.dryExtent }),
+          ...(form.probabilistic && { probabilistic: form.probabilistic }),
+          ...(form.members       && { members: form.members }),
+          ...(form.refModel      && { ref_model: form.refModel }),
+          ...(form.refModelDir   && { ref_model_dir: form.refModelDir }),
+          ...(form.ncMask        && { nc_mask: form.ncMask }),
+          ...(form.threshFile    && { thresh_file: form.threshFile }),
         },
       });
     } catch (e) {
@@ -86,7 +152,13 @@
             >
               <span class="job-region">{job.params?.region ?? job.model_name.toUpperCase()}</span>
               <div class="job-meta">
-                <span class="job-model">{job.created_at ? new Date(job.created_at).toLocaleDateString() : ""}</span>
+                <span class="job-model">
+                  {#if job.params?.start_date && job.params?.end_date}
+                    {job.params.start_date} – {job.params.end_date}
+                  {:else}
+                    {job.created_at ? new Date(job.created_at).toLocaleDateString() : ""}
+                  {/if}
+                </span>
                 <span class="status-badge {job.status}">{job.status}</span>
               </div>
             </button>
@@ -117,8 +189,30 @@
         <fieldset>
           <legend>Dataset</legend>
           <div class="field-row">
-            <label>Name <input bind:value={form.datasetName} required /></label>
-            <label class="grow">Observations Directory <input bind:value={form.obsDir} required /></label>
+            <label class="grow">Observations
+              <select bind:value={form.datasetId} required>
+                {#if datasets.length === 0}
+                  <option value="">Loading…</option>
+                {:else}
+                  {@const demoDatasets = datasets.filter((d) => d.is_demo)}
+                  {@const userDatasets = datasets.filter((d) => !d.is_demo)}
+                  {#if demoDatasets.length > 0}
+                    <optgroup label="Demo Data">
+                      {#each demoDatasets as d}
+                        <option value={d.id}>{d.name}</option>
+                      {/each}
+                    </optgroup>
+                  {/if}
+                  {#if userDatasets.length > 0}
+                    <optgroup label="My Datasets">
+                      {#each userDatasets as d}
+                        <option value={d.id}>{d.name}</option>
+                      {/each}
+                    </optgroup>
+                  {/if}
+                {/if}
+              </select>
+            </label>
           </div>
         </fieldset>
 
@@ -126,11 +220,22 @@
           <legend>Model</legend>
           <div class="field-row">
             <label>Model
-              <select bind:value={form.modelName}>
-                <option value="aifs">AIFS</option>
+              <select
+                value={form.modelName}
+                onchange={(e) => {
+                  const m = models.find((m) => m.id === (e.target as HTMLSelectElement).value);
+                  if (m) applyModelPreset(m);
+                }}
+              >
+                {#if models.length === 0}
+                  <option value="">Loading…</option>
+                {:else}
+                  {#each models as m}
+                    <option value={m.id}>{m.display_name}</option>
+                  {/each}
+                {/if}
               </select>
             </label>
-            <label class="grow">Model Directory <input bind:value={form.modelDir} required /></label>
           </div>
         </fieldset>
 
@@ -141,16 +246,65 @@
             <label>Start Date <input type="date" bind:value={form.startDate} required /></label>
             <label>End Date <input type="date" bind:value={form.endDate} required /></label>
           </div>
-          <div class="field-row">
-            <label>Clim Start Year <input type="number" bind:value={form.startYearClim} required /></label>
-            <label>Clim End Year <input type="number" bind:value={form.endYearClim} required /></label>
-            <label>Init Days <input bind:value={form.initDays} placeholder="e.g. 2,5" required /></label>
-            <label class="checkbox-label">
-              <input type="checkbox" bind:checked={form.parallel} />
-              Parallel
-            </label>
-          </div>
         </fieldset>
+
+        <details class="param-section" open>
+          <summary>Common Options</summary>
+          <fieldset class="nested-fieldset">
+            <div class="field-row">
+              <label>Clim Start Year <input type="number" bind:value={form.startYearClim} /></label>
+              <label>Clim End Year <input type="number" bind:value={form.endYearClim} /></label>
+              <label>Max Forecast Day <input type="number" bind:value={form.maxForecastDay} placeholder="optional" /></label>
+              <label>Init Days <input bind:value={form.initDays} placeholder="e.g. 2,5" /></label>
+              <label class="checkbox-label"><input type="checkbox" bind:checked={form.parallel} /> Parallel</label>
+            </div>
+          </fieldset>
+        </details>
+
+        <details class="param-section">
+          <summary>Advanced Options</summary>
+          <fieldset class="nested-fieldset">
+            <legend>Observation Overrides</legend>
+            <div class="field-row">
+              <label>obs <input bind:value={form.obs} /></label>
+              <label>obs_file_pattern <input bind:value={form.obsFilePattern} /></label>
+              <label>obs_var <input bind:value={form.obsVar} /></label>
+              <label>model_var <input bind:value={form.modelVar} /></label>
+              <label>file_pattern <input bind:value={form.filePattern} /></label>
+            </div>
+          </fieldset>
+          <fieldset class="nested-fieldset">
+            <legend>Wet / Dry Spell</legend>
+            <div class="field-row">
+              <label>wet_threshold <input type="number" step="any" bind:value={form.wetThreshold} /></label>
+              <label>wet_init <input type="number" step="any" bind:value={form.wetInit} /></label>
+              <label>wet_spell <input type="number" bind:value={form.wetSpell} /></label>
+              <label>dry_spell <input type="number" bind:value={form.drySpell} /></label>
+              <label>dry_extent <input type="number" bind:value={form.dryExtent} /></label>
+            </div>
+          </fieldset>
+          <fieldset class="nested-fieldset">
+            <legend>Probabilistic</legend>
+            <div class="field-row">
+              <label class="checkbox-label"><input type="checkbox" bind:checked={form.probabilistic} /> Probabilistic</label>
+              <label>Members <input bind:value={form.members} placeholder="e.g. 1,2,3 or All" /></label>
+            </div>
+          </fieldset>
+          <fieldset class="nested-fieldset">
+            <legend>Reference Model</legend>
+            <div class="field-row">
+              <label>ref_model <input bind:value={form.refModel} /></label>
+              <label class="grow">ref_model_dir <input bind:value={form.refModelDir} /></label>
+            </div>
+          </fieldset>
+          <fieldset class="nested-fieldset">
+            <legend>Masks &amp; Thresholds</legend>
+            <div class="field-row">
+              <label class="grow">nc_mask path <input bind:value={form.ncMask} /></label>
+              <label class="grow">thresh_file path <input bind:value={form.threshFile} /></label>
+            </div>
+          </fieldset>
+        </details>
 
         {#if submitError}
           <p class="form-error">{submitError}</p>
@@ -515,6 +669,59 @@
     text-align: center;
     color: var(--color-text-dim);
     font-size: 0.85rem;
+  }
+
+  .param-section {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.5rem;
+    background: var(--color-surface);
+    overflow: hidden;
+  }
+
+  .param-section > summary {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-text-dim);
+    padding: 0.85rem 1.25rem;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    user-select: none;
+  }
+
+  .param-section > summary::before {
+    content: "▶";
+    font-size: 0.55rem;
+    transition: transform 0.15s;
+    color: var(--color-accent);
+  }
+
+  .param-section[open] > summary::before {
+    transform: rotate(90deg);
+  }
+
+  .param-section > summary::-webkit-details-marker { display: none; }
+
+  .nested-fieldset {
+    border: none;
+    border-top: 1px solid var(--color-border-subtle);
+    border-radius: 0;
+    padding: 0.85rem 1.25rem;
+    margin: 0;
+    background: transparent;
+  }
+
+  .nested-fieldset legend {
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-text-dim);
+    padding: 0 0.25rem;
   }
 
   .figure-name {
