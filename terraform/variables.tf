@@ -36,6 +36,18 @@ variable "db_password" {
   sensitive   = true
 }
 
+variable "custom_domain" {
+  description = "Custom domain for the frontend (e.g. app.example.com or example.com). Leave empty to skip domain mapping."
+  type        = string
+  default     = ""
+}
+
+variable "frontend_url" {
+  description = "Frontend Cloud Run URL for CORS allowlist. Set after first deploy if unknown."
+  type        = string
+  default     = ""
+}
+
 variable "job_output_retention_days" {
   description = "Days before job output files are automatically deleted from GCS"
   type        = number

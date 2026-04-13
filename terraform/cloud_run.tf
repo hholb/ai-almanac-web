@@ -29,6 +29,28 @@ resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
   member   = "allUsers"
 }
 
+# ---------------------------------------------------------------------------
+# Custom domain mapping for the frontend
+# Uses the v1 API domain mapping which works with v2 services.
+# GCP provisions a Google-managed SSL certificate automatically.
+#
+# After terraform apply, GCP will show the IPs/CNAME to add to your DNS:
+#   gcloud beta run domain-mappings describe --domain=YOUR_DOMAIN --region=REGION
+# ---------------------------------------------------------------------------
+resource "google_cloud_run_domain_mapping" "frontend" {
+  count    = var.custom_domain != "" ? 1 : 0
+  location = var.region
+  name     = var.custom_domain
+
+  metadata {
+    namespace = var.project_id
+  }
+
+  spec {
+    route_name = google_cloud_run_v2_service.frontend.name
+  }
+}
+
 resource "google_cloud_run_v2_service" "backend" {
   name     = "almanac-backend"
   location = var.region
@@ -121,10 +143,11 @@ resource "google_cloud_run_v2_service" "backend" {
         value = google_service_account.batch_worker.email
       }
 
-      # Frontend origin for CORS
+      # Frontend origin for CORS — set var.frontend_url after first deploy
+      # to lock down CORS. Leave empty to allow all origins initially.
       env {
         name  = "FRONTEND_URL"
-        value = google_cloud_run_v2_service.frontend.uri
+        value = var.frontend_url
       }
 
       # ROMP image pulled from GHCR by Cloud Batch workers

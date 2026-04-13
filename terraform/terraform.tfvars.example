@@ -9,5 +9,12 @@ romp_image     = "ghcr.io/your-org/romp:latest"
 db_tier     = "db-f1-micro"   # upgrade to db-g1-small for production load
 db_password = "changeme"      # also stored in Secret Manager after first apply
 
+# Custom domain for the frontend — requires domain ownership verification (see below)
+# custom_domain = "app.example.com"
+
+# Frontend Cloud Run URL — leave empty on first deploy (cycle), set after
+# frontend service is created to lock down CORS on the backend.
+# frontend_url = "https://almanac-frontend-abc123-uc.a.run.app"
+
 # Job output retention (days before GCS auto-deletes outputs)
 job_output_retention_days = 30
