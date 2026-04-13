@@ -83,9 +83,30 @@ const blobCache = new Map<string, string>();
 
 export async function fetchResultBlob(resultUrl: string): Promise<string> {
   if (blobCache.has(resultUrl)) return blobCache.get(resultUrl)!;
-  const res = await fetch(`${BASE_URL}${resultUrl}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(`Failed to fetch result: ${res.status}`);
-  const objectUrl = URL.createObjectURL(await res.blob());
+
+  // First, hit the backend with auth to get the file or a signed-URL redirect.
+  const res = await fetch(`${BASE_URL}${resultUrl}`, {
+    headers: authHeaders(),
+    redirect: "manual",  // don't auto-follow so we can strip auth before GCS redirect
+  });
+
+  let blob: Blob;
+  if (res.type === "opaqueredirect") {
+    // Production: backend returned a 302 to a GCS signed URL.
+    // Fetch the redirect location without the Authorization header — GCS rejects it.
+    const location = res.headers.get("Location");
+    if (!location) throw new Error("Redirect response missing Location header");
+    const gcsRes = await fetch(location);
+    if (!gcsRes.ok) throw new Error(`Failed to fetch result from GCS: ${gcsRes.status}`);
+    blob = await gcsRes.blob();
+  } else if (res.ok) {
+    // Local dev: backend served the file directly.
+    blob = await res.blob();
+  } else {
+    throw new Error(`Failed to fetch result: ${res.status}`);
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
   blobCache.set(resultUrl, objectUrl);
   return objectUrl;
 }

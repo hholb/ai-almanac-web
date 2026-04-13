@@ -88,10 +88,8 @@ def get_or_create_user(conn, external_id: str, email: str | None = None) -> dict
     if row:
         return dict(row)
     user_id = str(uuid.uuid4())
-    conn.execute(
-        text("INSERT INTO users (id, external_id, email, created_at) VALUES (:id, :eid, :email, :now)"),
+    row = conn.execute(
+        text("INSERT INTO users (id, external_id, email, created_at) VALUES (:id, :eid, :email, :now) RETURNING *"),
         {"id": user_id, "eid": external_id, "email": email, "now": datetime.now(timezone.utc).isoformat()},
-    )
-    return dict(conn.execute(
-        text("SELECT * FROM users WHERE id = :id"), {"id": user_id}
-    ).mappings().fetchone())
+    ).mappings().fetchone()
+    return dict(row)

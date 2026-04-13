@@ -226,7 +226,10 @@ async def create_job(body: JobCreate, user: CurrentUser):
                  "cfg": json.dumps(config), "now": now},
             )
             return dict(conn.execute(
-                text("SELECT * FROM jobs WHERE id = :id"), {"id": job_id}
+                text("INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at, started_at) "
+                     "VALUES (:id, :uid, :did, 'running', :cfg, :now, :now) RETURNING *"),
+                {"id": job_id, "uid": user["id"], "did": body.dataset_id,
+                 "cfg": json.dumps(config), "now": now},
             ).mappings().fetchone())
 
     row = await asyncio.to_thread(_insert)

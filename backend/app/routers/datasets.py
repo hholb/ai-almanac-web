@@ -97,7 +97,8 @@ async def confirm_upload(dataset_id: str, user: CurrentUser):
                 {"now": now, "id": dataset_id},
             )
             updated = conn.execute(
-                text("SELECT * FROM datasets WHERE id = :id"), {"id": dataset_id}
+                text("UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id RETURNING *"),
+                {"now": now, "id": dataset_id},
             ).mappings().fetchone()
             return dict(updated), None
 
@@ -167,7 +168,9 @@ async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
                  "key": body.obs_dir, "now": now},
             )
             return dict(conn.execute(
-                text("SELECT * FROM datasets WHERE id = :id"), {"id": dataset_id}
+                text("INSERT INTO datasets (id, user_id, name, status, storage_key, created_at, ready_at) "
+                     "VALUES (:id, :uid, :name, 'ready', :key, :now, :now) RETURNING *"),
+                {"id": dataset_id, "uid": user["id"], "name": body.name, "key": body.obs_dir, "now": now},
             ).mappings().fetchone())
 
     return DatasetOut(**await asyncio.to_thread(_insert))
