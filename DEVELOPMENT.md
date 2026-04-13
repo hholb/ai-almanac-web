@@ -163,26 +163,60 @@ terraform/               # GCP infrastructure (Cloud Run, SQL, GCS, Batch, Secre
 
 5. Upload model and obs data to the data bucket:
    ```bash
-   gcloud storage cp -r /local/data/obs/   gs://almanac-data-YOUR_PROJECT/obs/
+   gcloud storage cp -r /local/data/obs/    gs://almanac-data-YOUR_PROJECT/obs/
    gcloud storage cp -r /local/data/models/ gs://almanac-data-YOUR_PROJECT/models/
    ```
 
-6. Build and push Docker images, then redeploy Cloud Run services with the new image tags.
+6. **Deploy the backend image first** so its Cloud Run URL is known before building the frontend:
+   ```bash
+   # Build and push backend
+   docker build -t ghcr.io/YOUR_ORG/almanac-backend:latest ./backend
+   docker push ghcr.io/YOUR_ORG/almanac-backend:latest
+
+   # Deploy backend to Cloud Run
+   gcloud run deploy almanac-backend \
+     --image ghcr.io/YOUR_ORG/almanac-backend:latest \
+     --region us-central1
+
+   # Note the backend URL from the output, e.g. https://almanac-backend-abc123-uc.a.run.app
+   ```
+
+7. **Build and deploy the frontend** with the backend URL baked in:
+   ```bash
+   # VITE_API_URL is embedded in the JS bundle at build time
+   docker build \
+     --build-arg VITE_API_URL=https://almanac-backend-abc123-uc.a.run.app \
+     -t ghcr.io/YOUR_ORG/almanac-frontend:latest \
+     ./web
+   docker push ghcr.io/YOUR_ORG/almanac-frontend:latest
+
+   gcloud run deploy almanac-frontend \
+     --image ghcr.io/YOUR_ORG/almanac-frontend:latest \
+     --region us-central1
+   ```
+
+   The backend Cloud Run URL is stable — it won't change on subsequent deploys unless you delete and recreate the service. You only need to rebuild the frontend image if the backend URL changes.
 
 ### Subsequent deployments
 
 ```bash
-# Build and push images (adjust for your CI setup)
+# Backend only
 docker build -t ghcr.io/YOUR_ORG/almanac-backend:latest ./backend
 docker push ghcr.io/YOUR_ORG/almanac-backend:latest
-
-# Update Cloud Run with new image
 gcloud run deploy almanac-backend \
   --image ghcr.io/YOUR_ORG/almanac-backend:latest \
   --region us-central1
-```
 
-Or update `terraform.tfvars` with the new image tag and run `terraform apply`.
+# Frontend (rebuild if VITE_API_URL or frontend code changed)
+docker build \
+  --build-arg VITE_API_URL=https://almanac-backend-abc123-uc.a.run.app \
+  -t ghcr.io/YOUR_ORG/almanac-frontend:latest \
+  ./web
+docker push ghcr.io/YOUR_ORG/almanac-frontend:latest
+gcloud run deploy almanac-frontend \
+  --image ghcr.io/YOUR_ORG/almanac-frontend:latest \
+  --region us-central1
+```
 
 ---
 

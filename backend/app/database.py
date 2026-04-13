@@ -20,13 +20,19 @@ from .config import settings
 
 
 def _make_engine():
-    url = settings.database_url
-    if url.startswith("sqlite"):
+    from sqlalchemy.engine import make_url
+    url = make_url(settings.database_url)
+    if url.get_dialect().name == "sqlite":
         return create_engine(
             url,
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+    # PostgreSQL: inject DB_PASSWORD from Secret Manager if not already in URL.
+    # Cloud Run injects it as a separate env var because Terraform can't easily
+    # interpolate a secret value into another env var's string.
+    if settings.db_password and not url.password:
+        url = url.set(password=settings.db_password)
     return create_engine(url, pool_pre_ping=True)
 
 

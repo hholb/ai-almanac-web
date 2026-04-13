@@ -7,8 +7,11 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------------------
     # Database
     # Local dev: SQLite. Production: Cloud SQL PostgreSQL via Auth Proxy socket.
+    # DB_PASSWORD is injected separately from Secret Manager and merged into
+    # the URL at engine creation time (see database.py).
     # ---------------------------------------------------------------------------
     database_url: str = "sqlite:///./almanac.db"
+    db_password: str = ""
 
     # ---------------------------------------------------------------------------
     # Storage backend
