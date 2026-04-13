@@ -51,6 +51,20 @@ resource "google_cloud_run_domain_mapping" "frontend" {
   }
 }
 
+resource "google_cloud_run_domain_mapping" "backend" {
+  count    = var.api_domain != "" ? 1 : 0
+  location = var.region
+  name     = var.api_domain
+
+  metadata {
+    namespace = var.project_id
+  }
+
+  spec {
+    route_name = google_cloud_run_v2_service.backend.name
+  }
+}
+
 resource "google_cloud_run_v2_service" "backend" {
   name     = "almanac-backend"
   location = var.region

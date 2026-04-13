@@ -11,6 +11,7 @@ db_password = "changeme"      # also stored in Secret Manager after first apply
 
 # Custom domain for the frontend — requires domain ownership verification (see below)
 # custom_domain = "app.example.com"
+# api_domain    = "api.example.com"
 
 # Frontend Cloud Run URL — leave empty on first deploy (cycle), set after
 # frontend service is created to lock down CORS on the backend.

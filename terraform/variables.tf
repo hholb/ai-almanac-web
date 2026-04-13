@@ -37,7 +37,13 @@ variable "db_password" {
 }
 
 variable "custom_domain" {
-  description = "Custom domain for the frontend (e.g. app.example.com or example.com). Leave empty to skip domain mapping."
+  description = "Custom domain for the frontend (e.g. app.example.com or example.com). Leave empty to skip."
+  type        = string
+  default     = ""
+}
+
+variable "api_domain" {
+  description = "Custom domain for the backend API (e.g. api.example.com). Leave empty to skip."
   type        = string
   default     = ""
 }
