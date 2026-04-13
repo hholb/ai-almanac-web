@@ -1,110 +1,143 @@
+import { untrack } from "svelte";
 import {
-  getJobs, getJob, getJobResults, getJobLogs, fetchResultBlob,
-  submitJob, deleteJob,
-  type Job, type JobResult, type JobParams,
+  getJobs, getJob, getJobMetrics, deleteJob, submitJob,
+  type Job, type JobParams, type JobMetrics,
 } from "./api";
 
-export type { Job, JobResult };
+export type { Job };
 
-export type RunFormData = {
-  datasetId: string;
-  modelName: string;
-  params: JobParams;
+export type RunGroup = {
+  key: string;           // `${region}||${start_date}||${end_date}`
+  region: string;
+  startDate: string;
+  endDate: string;
+  jobs: Job[];
+  mostRecentAt: string;  // for sort order
 };
+
+export type MultiRunFormData = {
+  datasetId: string;
+  modelNames: string[];
+  sharedParams: JobParams;
+  perModelOverrides?: Record<string, Partial<JobParams>>;
+};
+
+function buildRunGroups(jobs: Job[]): RunGroup[] {
+  const map = new globalThis.Map<string, Job[]>();
+  for (const job of jobs) {
+    const region = job.params?.region ?? "unknown";
+    const start  = job.params?.start_date ?? "unknown";
+    const end    = job.params?.end_date   ?? "unknown";
+    const key    = `${region}||${start}||${end}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(job);
+  }
+  return [...map.entries()]
+    .map(([key, groupJobs]) => {
+      const mostRecentAt = groupJobs
+        .map((j) => j.created_at ?? "")
+        .sort()
+        .at(-1) ?? "";
+      const first = groupJobs[0];
+      return {
+        key,
+        region:    first.params?.region     ?? "Unknown",
+        startDate: first.params?.start_date ?? "",
+        endDate:   first.params?.end_date   ?? "",
+        jobs: groupJobs,
+        mostRecentAt,
+      } satisfies RunGroup;
+    })
+    .sort((a, b) => b.mostRecentAt.localeCompare(a.mostRecentAt));
+}
 
 export class BenchmarkStore {
   jobs = $state<Job[]>([]);
-  selectedId = $state<string | null>(null);
+  selectedGroupKey = $state<string | null>(null);
   showForm = $state(true);
-  resultsPromise = $state<Promise<JobResult[]> | null>(null);
-  logsPromise = $state<Promise<string> | null>(null);
 
-  private resultsCache = new Map<string, JobResult[]>();
+  runGroups = $derived(buildRunGroups(this.jobs));
+  selectedGroup = $derived(
+    this.runGroups.find((g) => g.key === this.selectedGroupKey) ?? null
+  );
 
-  selectedJob = $derived(this.jobs.find((j) => j.id === this.selectedId) ?? null);
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  private pollInterval: ReturnType<typeof setInterval> | null = null;
-
-  async load(jobId?: string | null) {
+  async load(groupKey?: string | null) {
     try {
       this.jobs = await getJobs();
     } catch (e) {
-      console.error("failed to fetch jobs", e);
+      console.error("Failed to fetch jobs", e);
     }
-    if (jobId) {
-      this.selectedId = jobId;
-      this.showForm = false;
-      const job = this.jobs.find((j) => j.id === jobId);
-      if (job) {
-        if (job.status === "running") this.startPolling();
-        else this.loadDetail(job);
+    if (groupKey) {
+      const exists = buildRunGroups(this.jobs).some((g) => g.key === groupKey);
+      if (exists) {
+        this.selectedGroupKey = groupKey;
+        this.showForm = false;
       }
     }
+    this.startPolling();
   }
 
-  selectJob(job: Job) {
-    this.selectedId = job.id;
+  selectGroup(key: string) {
+    this.selectedGroupKey = key;
     this.showForm = false;
-    this.stopPolling();
-    if (job.status === "running") this.startPolling();
-    else this.loadDetail(job);
   }
 
-  loadDetail(job: Job) {
-    this.resultsPromise = null;
-    this.logsPromise = null;
-    if (job.status === "complete") {
-      const cached = this.resultsCache.get(job.id);
-      if (cached) {
-        this.resultsPromise = Promise.resolve(cached);
-      } else {
-        this.resultsPromise = getJobResults(job.id).then((results) => {
-          this.resultsCache.set(job.id, results);
-          return results;
-        });
-      }
-    } else if (job.status === "failed") {
-      this.logsPromise = getJobLogs(job.id).then((d) => d.logs);
+  async deleteGroup(key: string) {
+    const group = untrack(() => this.runGroups.find((g) => g.key === key));
+    if (!group) return;
+    await Promise.all(group.jobs.map((j) => deleteJob(j.id)));
+    const removedIds = new Set(group.jobs.map((j) => j.id));
+    this.jobs = untrack(() => this.jobs.filter((j) => !removedIds.has(j.id)));
+    if (untrack(() => this.selectedGroupKey) === key) {
+      this.selectedGroupKey = null;
+      this.showForm = true;
     }
   }
 
   startPolling() {
-    if (this.pollInterval) return;
-    this.pollInterval = setInterval(async () => {
-      if (!this.selectedId) return;
-      const updated = await getJob(this.selectedId);
-      this.jobs = this.jobs.map((j) => (j.id === updated.id ? updated : j));
-      if (updated.status !== "running") {
-        this.stopPolling();
-        this.loadDetail(updated);
-      }
+    if (this.pollTimer) return;
+    this.pollTimer = setInterval(async () => {
+      const running = untrack(() => this.jobs.filter((j) => j.status === "running"));
+      if (running.length === 0) return;
+      const updated = await Promise.all(running.map((j) => getJob(j.id)));
+      this.jobs = untrack(() =>
+        this.jobs.map((j) => updated.find((u) => u.id === j.id) ?? j)
+      );
     }, 3000);
   }
 
   stopPolling() {
-    if (this.pollInterval) { clearInterval(this.pollInterval); this.pollInterval = null; }
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
   }
 
-  async deleteJob(id: string): Promise<void> {
-    await deleteJob(id);
-    this.jobs = this.jobs.filter((j) => j.id !== id);
-    if (this.selectedId === id) {
-      this.selectedId = null;
-      this.showForm = true;
-      this.stopPolling();
-    }
+  async submitRuns(data: MultiRunFormData): Promise<void> {
+    const results = await Promise.all(
+      data.modelNames.map((modelName) =>
+        submitJob({
+          dataset_id: data.datasetId,
+          model_name: modelName,
+          params: {
+            ...data.sharedParams,
+            ...(data.perModelOverrides?.[modelName] ?? {}),
+          },
+        })
+      )
+    );
+    this.jobs = [...results, ...untrack(() => this.jobs)];
+    const first = results[0];
+    const key = `${first.params?.region ?? "unknown"}||${first.params?.start_date ?? "unknown"}||${first.params?.end_date ?? "unknown"}`;
+    this.selectedGroupKey = key;
+    this.showForm = false;
   }
 
-  /** Submits a job and adds it to the list. */
-  async submitRun(data: RunFormData): Promise<void> {
-    const job = await submitJob({
-      dataset_id: data.datasetId,
-      model_name: data.modelName,
-      params: data.params,
-    });
-    this.jobs = [job, ...this.jobs];
-    this.selectJob(job);
+  /** Fetch metrics for a specific job (used for grid resolution chip) */
+  getJobMetrics(id: string): Promise<JobMetrics> {
+    return getJobMetrics(id);
   }
 }
 
-export { fetchResultBlob };
+export { getJobMetrics };
+export { fetchResultBlob } from "./api";
+export type { JobMetrics };

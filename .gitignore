@@ -8,3 +8,8 @@ terraform/terraform.tfstate*
 .env
 *.db
 job_outputs
+
+# Data archives
+*.zip
+*.tar.gz
+*.tar.bz2

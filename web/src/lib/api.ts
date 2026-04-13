@@ -98,6 +98,7 @@ export type Dataset = {
   status: string;
   is_demo: boolean;
   created_at: string;
+  obs_file_pattern?: string | null;
 };
 
 export type JobStatus = "running" | "complete" | "failed";
@@ -178,3 +179,68 @@ export type JobResult = {
   type: "figure" | "output";
   url: string;
 };
+
+export type MetricStats = {
+  mean: number; min: number; max: number;
+  p25: number; p50: number; p75: number; p90: number;
+  unit: string;
+};
+
+export type WindowMetrics = {
+  window: string;
+  model: string;
+  tolerance_days: number | null;
+  metrics: Record<string, MetricStats>;
+};
+
+export type BboxExtent = {
+  lat_min: number; lat_max: number;
+  lon_min: number; lon_max: number;
+};
+
+export type GridInfo = {
+  lats: number[];
+  lons: number[];
+};
+
+export type JobMetrics = {
+  job_id: string;
+  windows: WindowMetrics[];
+  grid: GridInfo | null;
+  bbox: BboxExtent | null;
+};
+
+export type BboxFilter = Partial<BboxExtent>;
+
+export async function getJobMetrics(id: string, bbox?: BboxFilter): Promise<JobMetrics> {
+  const params = new URLSearchParams();
+  if (bbox?.lat_min != null) params.set("lat_min", String(bbox.lat_min));
+  if (bbox?.lat_max != null) params.set("lat_max", String(bbox.lat_max));
+  if (bbox?.lon_min != null) params.set("lon_min", String(bbox.lon_min));
+  if (bbox?.lon_max != null) params.set("lon_max", String(bbox.lon_max));
+  const qs = params.size ? `?${params}` : "";
+  return request<JobMetrics>(`/jobs/${id}/metrics${qs}`);
+}
+
+export type JobGridResponse = {
+  job_id: string;
+  model: string;
+  window: string;
+  metric: string;
+  lats: number[];
+  lons: number[];
+  values: (number | null)[][];
+  unit: string;
+  min: number;
+  max: number;
+};
+
+export async function getJobGrid(
+  id: string,
+  model: string,
+  window: string,
+  metric: string
+): Promise<JobGridResponse> {
+  const params = new URLSearchParams({ model, window, metric });
+  return request<JobGridResponse>(`/jobs/${id}/grid?${params}`);
+}

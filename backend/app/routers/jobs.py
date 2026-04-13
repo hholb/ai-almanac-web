@@ -75,6 +75,49 @@ class ResultFile(BaseModel):
     url: str    # relative URL to fetch the file
 
 
+class MetricStats(BaseModel):
+    mean: float
+    min: float
+    max: float
+    p25: float
+    p50: float
+    p75: float
+    p90: float
+    unit: str
+
+
+class WindowMetrics(BaseModel):
+    window: str
+    model: str
+    tolerance_days: int | None
+    metrics: dict[str, MetricStats]
+
+
+class GridInfo(BaseModel):
+    lats: list[float]   # all available latitude grid points (full domain)
+    lons: list[float]   # all available longitude grid points (full domain)
+
+
+class JobMetrics(BaseModel):
+    job_id: str
+    windows: list[WindowMetrics]
+    grid: GridInfo | None = None     # full-domain grid coordinates (never clipped)
+    bbox: dict | None = None         # actual extent after any clip
+
+
+class JobGridResponse(BaseModel):
+    job_id: str
+    model: str
+    window: str
+    metric: str
+    lats: list[float]
+    lons: list[float]
+    values: list[list[float | None]]  # 2D array [lat][lon]
+    unit: str
+    min: float
+    max: float
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -162,9 +205,16 @@ async def create_job(body: JobCreate, user: CurrentUser):
     # Start from user-submitted params; inject registry-only fields the frontend
     # doesn't expose (e.g. date_filter_year for fixed IFS/AIFS init schedules).
     romp_params = body.params.model_dump(exclude_none=True)
-    for key in ("date_filter_year",):
+    for key in ("date_filter_year", "probabilistic", "members"):
         if key not in romp_params and model_cfg.get(key) is not None:
             romp_params[key] = model_cfg[key]
+
+    # Inject obs_file_pattern from demo dataset config if not already set.
+    if "obs_file_pattern" not in romp_params and body.dataset_id.startswith("demo:"):
+        demo_map = {d["id"]: d for d in get_demo_datasets()}
+        demo = demo_map.get(body.dataset_id)
+        if demo and demo.get("obs_file_pattern"):
+            romp_params["obs_file_pattern"] = demo["obs_file_pattern"]
 
     config = {
         "model_name": body.model_name,
@@ -263,6 +313,217 @@ async def get_results(job_id: str, user: CurrentUser):
         return files
 
     return await asyncio.to_thread(_list_files)
+
+
+@router.get("/{job_id}/metrics", response_model=JobMetrics)
+async def get_metrics(
+    job_id: str,
+    user: CurrentUser,
+    lat_min: float | None = None,
+    lat_max: float | None = None,
+    lon_min: float | None = None,
+    lon_max: float | None = None,
+):
+    """Return spatial summary statistics for each metric in each verification window.
+
+    Optional bbox params lat_min/lat_max/lon_min/lon_max clip the spatial grid
+    before computing statistics, enabling subregion analysis.
+    """
+    def _check():
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT status FROM jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
+            ).fetchone()
+            return dict(row) if row else None
+
+    row = await asyncio.to_thread(_check)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if row["status"] != "complete":
+        raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
+
+    bbox = (lat_min, lat_max, lon_min, lon_max)
+    has_bbox = any(v is not None for v in bbox)
+
+    def _compute():
+        try:
+            import numpy as np
+            import xarray as xr
+        except ImportError:
+            raise HTTPException(status_code=503, detail="xarray not available on this server")
+
+        output_dir = Path(settings.job_outputs_dir) / job_id / "output"
+        if not output_dir.exists():
+            return JobMetrics(job_id=job_id, windows=[], bbox=None)
+
+        UNIT_MAP = {
+            "false_alarm_rate": "fraction",
+            "miss_rate": "fraction",
+        }
+
+        windows = []
+        grid_info: GridInfo | None = None
+        actual_bbox: dict | None = None
+
+        for nc_file in sorted(output_dir.glob("spatial_metrics_*.nc")):
+            ds = xr.open_dataset(nc_file)
+
+            # Capture full grid from first file (before any clip)
+            if grid_info is None and "lat" in ds.coords and "lon" in ds.coords:
+                grid_info = GridInfo(
+                    lats=[float(v) for v in sorted(ds.lat.values)],
+                    lons=[float(v) for v in sorted(ds.lon.values)],
+                )
+
+            # Apply bbox clip if requested
+            if has_bbox:
+                lats = ds.lat.values
+                lons = ds.lon.values
+                if lat_min is not None: lats = lats[lats >= lat_min]
+                if lat_max is not None: lats = lats[lats <= lat_max]
+                if lon_min is not None: lons = lons[lons >= lon_min]
+                if lon_max is not None: lons = lons[lons <= lon_max]
+                ds = ds.sel(lat=lats, lon=lons)
+
+            # Record clipped extent from first file
+            if actual_bbox is None and "lat" in ds.coords and "lon" in ds.coords:
+                lats = ds.lat.values
+                lons = ds.lon.values
+                if len(lats) and len(lons):
+                    actual_bbox = {
+                        "lat_min": float(lats.min()), "lat_max": float(lats.max()),
+                        "lon_min": float(lons.min()), "lon_max": float(lons.max()),
+                    }
+
+            model = str(ds.attrs.get("model", ""))
+            window_label = str(ds.attrs.get("verification_window", "")).replace(",", "-")
+            tolerance_days = int(ds.attrs["tolerance_days"]) if "tolerance_days" in ds.attrs else None
+
+            metrics: dict[str, MetricStats] = {}
+            for var in ds.data_vars:
+                arr = ds[var].values.astype(float)
+                valid = arr[~np.isnan(arr)]
+                if len(valid) == 0:
+                    continue
+                var_str = str(var)
+                unit = UNIT_MAP.get(var_str, "days")
+                metrics[var_str] = MetricStats(
+                    mean=float(np.mean(valid)),
+                    min=float(np.min(valid)),
+                    max=float(np.max(valid)),
+                    p25=float(np.percentile(valid, 25)),
+                    p50=float(np.percentile(valid, 50)),
+                    p75=float(np.percentile(valid, 75)),
+                    p90=float(np.percentile(valid, 90)),
+                    unit=unit,
+                )
+            ds.close()
+            windows.append(WindowMetrics(
+                window=window_label,
+                model=model,
+                tolerance_days=tolerance_days,
+                metrics=metrics,
+            ))
+
+        windows.sort(key=lambda w: (w.model == "climatology", w.window))
+        return JobMetrics(job_id=job_id, windows=windows, grid=grid_info, bbox=actual_bbox)
+
+    return await asyncio.to_thread(_compute)
+
+
+@router.get("/{job_id}/grid", response_model=JobGridResponse)
+async def get_grid(
+    job_id: str,
+    user: CurrentUser,
+    model: str,
+    window: str,
+    metric: str,
+):
+    """Return raw grid values for a specific metric/model/window."""
+    def _check():
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT status FROM jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
+            ).fetchone()
+            return dict(row) if row else None
+
+    row = await asyncio.to_thread(_check)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if row["status"] != "complete":
+        raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
+
+    def _load():
+        try:
+            import numpy as np
+            import xarray as xr
+        except ImportError:
+            raise HTTPException(status_code=503, detail="xarray not available")
+
+        output_dir = Path(settings.job_outputs_dir) / job_id / "output"
+        if not output_dir.exists():
+            raise HTTPException(status_code=404, detail="No output found for this job")
+
+        # Match "spatial_metrics_{model}_{window}.nc"
+        # Normalize window label for filename (sometimes 1,15 in NetCDF attrs, but 1-15 in filenames)
+        w_alt = window.replace("-", ",")
+        matches = list(output_dir.glob(f"spatial_metrics_{model}_{window}.nc"))
+        if not matches:
+            matches = list(output_dir.glob(f"spatial_metrics_{model}_{w_alt}.nc"))
+
+        if not matches:
+             raise HTTPException(status_code=404, detail=f"Grid file for {model}/{window} not found")
+
+        ds = xr.open_dataset(matches[0])
+        if metric not in ds.data_vars:
+            ds.close()
+            raise HTTPException(status_code=404, detail=f"Metric {metric!r} not found in grid")
+
+        da = ds[metric]
+        # Ensure we have exactly (lat, lon) dimensions in that order
+        if "lat" in da.dims and "lon" in da.dims:
+            da = da.transpose("lat", "lon")
+        
+        # Squeeze to remove any single-item dimensions (like time or window)
+        da = da.squeeze()
+        
+        lats = [float(v) for v in da.lat.values]
+        lons = [float(v) for v in da.lon.values]
+
+        # Convert to 2D list. We replace NaNs with None for clean JSON serialization.
+        arr = da.values.astype(float)
+        if arr.ndim != 2:
+            ds.close()
+            raise HTTPException(status_code=500, detail=f"Expected 2D array for metric, got {arr.ndim}D {arr.shape}")
+            
+        values = np.where(np.isnan(arr), None, arr).tolist()
+
+        UNIT_MAP = {
+            "false_alarm_rate": "fraction",
+            "miss_rate": "fraction",
+        }
+        unit = UNIT_MAP.get(metric, "days")
+
+        # Use full dataarray for min/max to ensure we catch everything
+        valid = arr[~np.isnan(arr)]
+        v_min = float(valid.min()) if len(valid) > 0 else 0.0
+        v_max = float(valid.max()) if len(valid) > 0 else 0.0
+
+        ds.close()
+        return JobGridResponse(
+            job_id=job_id,
+            model=model,
+            window=window,
+            metric=metric,
+            lats=lats,
+            lons=lons,
+            values=values,
+            unit=unit,
+            min=v_min,
+            max=v_max,
+        )
+
+    return await asyncio.to_thread(_load)
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)

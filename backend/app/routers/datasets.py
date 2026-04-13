@@ -26,6 +26,7 @@ class DatasetOut(BaseModel):
     ready_at: str | None = None
     error: str | None = None
     is_demo: bool = False
+    obs_file_pattern: str | None = None  # set for demo datasets that need a non-default filename pattern
 
 
 class UploadUrlRequest(BaseModel):
@@ -109,6 +110,7 @@ async def list_datasets(user: CurrentUser):
             status="ready",
             created_at="",
             is_demo=True,
+            obs_file_pattern=d.get("obs_file_pattern"),
         )
         for d in get_demo_datasets()
     ]

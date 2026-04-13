@@ -89,6 +89,17 @@ def _run(job_id: str, config: dict) -> None:
         if result.returncode == 0:
             _update_status(job_id, "complete")
             logger.info("Job %s completed", job_id)
+        elif result.returncode == -11 or result.returncode == 139:
+            # SIGSEGV in a C extension (e.g. rasterio) after outputs are written.
+            # Treat as complete if output files exist, otherwise fail normally.
+            output_dir = Path(settings.job_outputs_dir).resolve() / job_id / "output"
+            has_output = output_dir.exists() and any(output_dir.iterdir())
+            if has_output:
+                _update_status(job_id, "complete")
+                logger.warning("Job %s exited with segfault but has output — marking complete", job_id)
+            else:
+                _update_status(job_id, "failed", error="Container segfaulted with no output")
+                logger.error("Job %s segfaulted with no output", job_id)
         else:
             _update_status(job_id, "failed", error=f"Container exited with code {result.returncode}")
             logger.error("Job %s failed (exit %d)", job_id, result.returncode)

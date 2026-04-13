@@ -7,6 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.135.3",
     "globus-sdk>=4.5.0",
+    "netcdf4>=1.7.4",
     "pydantic-settings>=2.13.1",
     "uvicorn[standard]>=0.44.0",
+    "xarray>=2026.2.0",
 ]

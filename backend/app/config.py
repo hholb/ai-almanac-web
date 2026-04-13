@@ -21,9 +21,17 @@ class Settings(BaseSettings):
 
     # Demo observation datasets — shown to all users for testing.
     # Add entries here for each pre-loaded obs directory on the server.
-    # Format: comma-separated "Name=path" pairs.
-    # e.g. demo_obs_datasets: str = "India Demo=/data/obs/india,Ethiopia Demo=/data/obs/ethiopia"
-    demo_obs_datasets: str = "India Demo (2013–2020)=/Users/hayden/code/ROMP/demo/data/obs,Ethiopia (CHIRPS/IMERG 1998–2024)=/Users/hayden/code/ROMP/data/ethiopia/obs"
+    # Format: comma-separated "Name=path" or "Name=path|obs_file_pattern" pairs.
+    # e.g. demo_obs_datasets: str = "India Demo=/data/obs/india,IMD 1°=/data/imd/1p0|data_{}.nc"
+    demo_obs_datasets: str = (
+        "India Demo (1964–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/2p0|data_{}.nc,"
+        "India Demo (2013–2020)=/Users/hayden/code/ROMP/demo/data/obs,"
+        "Ethiopia (CHIRPS/IMERG 1998–2024)=/Users/hayden/code/ROMP/data/ethiopia/obs,"
+        "IMD India 0.25° (1901–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/0p25,"
+        "IMD India 1.0° (1901–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/1p0|data_{}.nc,"
+        "IMD India 2.0° (1901–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/2p0|data_{}.nc,"
+        "IMD India 4.0° (1901–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/4p0"
+    )
 
     # Model data directories — override per deployment via env vars.
     aifs_model_dir: str = "/Users/hayden/code/ROMP/data/india/aifs"
@@ -52,16 +60,16 @@ def get_model_registry() -> list[dict]:
             "model_type": "AIWP",
             "model_dir": settings.aifs_model_dir,
             "model_var": "tp",
-            "unit_cvt": None,
+            "unit_cvt": 1000,
             "file_pattern": "{}.nc",
             "probabilistic": False,
             "members": None,
             "init_days": "0,3",
             "date_filter_year": 2013,
-            "start_date": "2013-05-01",
+            "start_date": "1964-05-01",
             "end_date": "2018-07-31",
-            "start_year_clim": 2013,
-            "end_year_clim": 2018,
+            "start_year_clim": 1964,
+            "end_year_clim": 2018,  # clim end capped to data end
         },
         {
             "id": "aifs_daily",
@@ -69,14 +77,14 @@ def get_model_registry() -> list[dict]:
             "model_type": "AIWP",
             "model_dir": settings.aifs_daily_model_dir,
             "model_var": "tp",
-            "unit_cvt": None,
+            "unit_cvt": 1000,
             "file_pattern": "{}.nc",
             "probabilistic": False,
             "members": None,
             "init_days": "0,1,2,3,4,5,6",
             "start_date": "2019-05-01",
             "end_date": "2024-07-31",
-            "start_year_clim": 1998,
+            "start_year_clim": 1991,
             "end_year_clim": 2024,
         },
         {
@@ -85,15 +93,15 @@ def get_model_registry() -> list[dict]:
             "model_type": "NWP",
             "model_dir": settings.ifs_model_dir,
             "model_var": "tp",
-            "unit_cvt": None,
+            "unit_cvt": 1000,
             "file_pattern": "{}.nc",
             "probabilistic": True,
-            "members": "11",
+            "members": None,
             "init_days": "0,3",
             "date_filter_year": 2013,
             "start_date": "2004-05-01",
             "end_date": "2023-07-31",
-            "start_year_clim": 1998,
+            "start_year_clim": 1991,
             "end_year_clim": 2023,
         },
         {
@@ -102,15 +110,15 @@ def get_model_registry() -> list[dict]:
             "model_type": "AIWP",
             "model_dir": settings.neuralgcm_model_dir,
             "model_var": "tp",
-            "unit_cvt": None,
+            "unit_cvt": 1000,
             "file_pattern": "{}.nc",
             "probabilistic": True,
-            "members": "51",
+            "members": None,
             "init_days": "0,3",
             "date_filter_year": 2013,
             "start_date": "1965-05-01",
             "end_date": "2024-07-31",
-            "start_year_clim": 1998,
+            "start_year_clim": 1965,
             "end_year_clim": 2024,
         },
         {
@@ -119,15 +127,15 @@ def get_model_registry() -> list[dict]:
             "model_type": "AIWP",
             "model_dir": settings.fuxi_model_dir,
             "model_var": "tp",
-            "unit_cvt": None,
+            "unit_cvt": 1000,
             "file_pattern": "{}.nc",
             "probabilistic": False,
             "members": None,
             "init_days": "0,3",
             "date_filter_year": 2013,
-            "start_date": "1965-05-01",
+            "start_date": "1964-05-01",
             "end_date": "2024-07-31",
-            "start_year_clim": 1998,
+            "start_year_clim": 1964,
             "end_year_clim": 2024,
         },
         {
@@ -136,7 +144,7 @@ def get_model_registry() -> list[dict]:
             "model_type": "AIWP",
             "model_dir": settings.graphcast_model_dir,
             "model_var": "tp",
-            "unit_cvt": None,
+            "unit_cvt": 1000,
             "file_pattern": "{}.nc",
             "probabilistic": False,
             "members": None,
@@ -144,7 +152,7 @@ def get_model_registry() -> list[dict]:
             "date_filter_year": 2013,
             "start_date": "1965-05-01",
             "end_date": "2024-07-31",
-            "start_year_clim": 1998,
+            "start_year_clim": 1965,
             "end_year_clim": 2024,
         },
         {
@@ -153,15 +161,15 @@ def get_model_registry() -> list[dict]:
             "model_type": "AIWP",
             "model_dir": settings.gencast_model_dir,
             "model_var": "tp",
-            "unit_cvt": None,
+            "unit_cvt": 1000,
             "file_pattern": "{}.nc",
             "probabilistic": True,
-            "members": "52",
+            "members": None,
             "init_days": "0,3",
             "date_filter_year": 2019,
             "start_date": "2019-05-01",
             "end_date": "2024-07-31",
-            "start_year_clim": 1998,
+            "start_year_clim": 1991,
             "end_year_clim": 2024,
         },
         {
@@ -170,15 +178,15 @@ def get_model_registry() -> list[dict]:
             "model_type": "AIWP",
             "model_dir": settings.fuxi_s2s_model_dir,
             "model_var": "tp",
-            "unit_cvt": None,
+            "unit_cvt": 1000,
             "file_pattern": "{}.nc",
             "probabilistic": True,
-            "members": "51",
+            "members": None,
             "init_days": "0,3",
             "date_filter_year": 2002,
             "start_date": "2002-05-01",
             "end_date": "2021-07-31",
-            "start_year_clim": 1998,
+            "start_year_clim": 1991,
             "end_year_clim": 2021,
         },
     ]
@@ -187,16 +195,33 @@ def get_model_registry() -> list[dict]:
 
 
 def get_demo_datasets() -> list[dict]:
-    """Parse demo_obs_datasets setting into a list of dataset descriptors."""
+    """Parse demo_obs_datasets setting into a list of dataset descriptors.
+
+    Each entry is "Name=path" or "Name=path|obs_file_pattern".
+    The obs_file_pattern (e.g. "data_{}.nc") is passed to ROMP when a job is
+    submitted against this dataset, overriding the default "{}.nc" pattern.
+    """
     result = []
     for entry in settings.demo_obs_datasets.split(","):
         entry = entry.strip()
         if not entry or "=" not in entry:
             continue
-        name, _, path = entry.partition("=")
-        name, path = name.strip(), path.strip()
+        name, _, rest = entry.partition("=")
+        name = name.strip()
+        # rest may be "path" or "path|obs_file_pattern"
+        if "|" in rest:
+            path, _, obs_file_pattern = rest.partition("|")
+            path = path.strip()
+            obs_file_pattern = obs_file_pattern.strip() or None
+        else:
+            path = rest.strip()
+            obs_file_pattern = None
         if name and path:
-            # Stable ID derived from name so it doesn't change across restarts.
-            demo_id = "demo:" + name.lower().replace(" ", "-")
-            result.append({"id": demo_id, "name": name, "obs_dir": path})
+            demo_id = "demo:" + name.lower().replace(" ", "-").replace("(", "").replace(")", "").replace("°", "deg")
+            result.append({
+                "id": demo_id,
+                "name": name,
+                "obs_dir": path,
+                "obs_file_pattern": obs_file_pattern,
+            })
     return result
