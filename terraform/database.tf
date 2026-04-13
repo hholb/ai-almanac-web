@@ -10,7 +10,8 @@ resource "google_sql_database_instance" "almanac" {
   region           = var.region
 
   settings {
-    tier = var.db_tier  # e.g. "db-f1-micro" for dev, "db-g1-small" for prod
+    tier    = var.db_tier  # e.g. "db-f1-micro" for dev, "db-g1-small" for prod
+    edition = "ENTERPRISE"  # ENTERPRISE_PLUS is the new default but requires different tier names
 
     backup_configuration {
       enabled    = true
