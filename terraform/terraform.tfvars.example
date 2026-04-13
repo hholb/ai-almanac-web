@@ -1,3 +1,13 @@
 project_id     = "your-gcp-project-id"
-frontend_image = "gcr.io/your-gcp-project-id/monsoon-frontend:latest"
-backend_image  = "gcr.io/your-gcp-project-id/monsoon-backend:latest"
+region         = "us-central1"
+
+frontend_image = "ghcr.io/your-org/almanac-frontend:latest"
+backend_image  = "ghcr.io/your-org/almanac-backend:latest"
+romp_image     = "ghcr.io/your-org/romp:latest"
+
+# Cloud SQL
+db_tier     = "db-f1-micro"   # upgrade to db-g1-small for production load
+db_password = "changeme"      # also stored in Secret Manager after first apply
+
+# Job output retention (days before GCS auto-deletes outputs)
+job_output_retention_days = 30

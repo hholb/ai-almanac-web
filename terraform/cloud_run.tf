@@ -1,5 +1,5 @@
 resource "google_cloud_run_v2_service" "frontend" {
-  name     = "monsoon-frontend"
+  name     = "almanac-frontend"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
 
@@ -21,7 +21,6 @@ resource "google_cloud_run_v2_service" "frontend" {
   }
 }
 
-# Allow unauthenticated access to the frontend (public website)
 resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
   project  = var.project_id
   location = var.region
@@ -31,19 +30,123 @@ resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
 }
 
 resource "google_cloud_run_v2_service" "backend" {
-  name     = "monsoon-backend"
+  name     = "almanac-backend"
   location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  # Frontend calls the backend directly from the browser (CORS), so it must be public.
+  # App-level auth (Globus token validation) protects all non-health endpoints.
+  ingress  = "INGRESS_TRAFFIC_ALL"
 
   template {
     service_account = google_service_account.backend.email
 
+    # Connect to Cloud SQL via built-in Auth Proxy socket
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.almanac.connection_name]
+      }
+    }
+
     containers {
       image = var.backend_image
+
+      resources {
+        limits = {
+          cpu    = "2"
+          memory = "2Gi"
+        }
+      }
 
       ports {
         container_port = 8000
       }
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
+
+      # Database — password injected from Secret Manager at runtime
+      env {
+        name  = "DATABASE_URL"
+        value = "postgresql+psycopg2://almanac-backend@/almanac?host=/cloudsql/${google_sql_database_instance.almanac.connection_name}"
+      }
+      env {
+        name = "DB_PASSWORD"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.db_password.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      # GCS bucket names — backend uses these to build GCS paths and signed URLs
+      env {
+        name  = "GCS_DATA_BUCKET"
+        value = google_storage_bucket.data.name
+      }
+      env {
+        name  = "GCS_UPLOADS_BUCKET"
+        value = google_storage_bucket.uploads.name
+      }
+      env {
+        name  = "GCS_OUTPUTS_BUCKET"
+        value = google_storage_bucket.job_outputs.name
+      }
+
+      # Globus auth credentials
+      env {
+        name = "GLOBUS_CLIENT_ID"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.globus_client_id.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "GLOBUS_CLIENT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.globus_client_secret.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      # Batch worker SA — passed to batch_runner.py when submitting jobs
+      env {
+        name  = "BATCH_WORKER_SA"
+        value = google_service_account.batch_worker.email
+      }
+
+      # Frontend origin for CORS
+      env {
+        name  = "FRONTEND_URL"
+        value = google_cloud_run_v2_service.frontend.uri
+      }
+
+      # ROMP image pulled from GHCR by Cloud Batch workers
+      env {
+        name  = "ROMP_IMAGE"
+        value = var.romp_image
+      }
     }
   }
+
+  depends_on = [
+    google_secret_manager_secret_iam_member.backend_reads_globus_id,
+    google_secret_manager_secret_iam_member.backend_reads_globus_secret,
+    google_secret_manager_secret_iam_member.backend_reads_db_password,
+  ]
+}
+
+# Unauthenticated invocation — Globus token validation is handled at the app layer
+resource "google_cloud_run_v2_service_iam_member" "backend_public" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.backend.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
