@@ -1,9 +1,5 @@
 """
-Auth dependency.
-
-Validates a Globus access token via token introspection. The frontend
-requests the backend API scope, which issues a token with resource_server
-matching this client — allowing full introspection including revocation status.
+Auth dependency — validates Globus access tokens via introspection.
 
 Stub mode: if GLOBUS_CLIENT_ID is not set, the raw token value is used
 as the external user ID so the server stays usable without credentials.
@@ -15,6 +11,7 @@ from typing import Annotated
 import globus_sdk
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import text
 
 from .config import settings
 from .database import get_db, get_or_create_user
@@ -44,7 +41,7 @@ async def current_user(
 
     def _get_or_create():
         with get_db() as conn:
-            return dict(get_or_create_user(conn, external_id=identity["sub"], email=identity.get("email")))
+            return get_or_create_user(conn, external_id=identity["sub"], email=identity.get("email"))
 
     return await asyncio.to_thread(_get_or_create)
 

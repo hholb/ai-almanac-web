@@ -6,12 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from ..auth import CurrentUser
 from ..config import settings, get_model_registry, get_demo_datasets
 from ..database import get_db
-from ..services.docker_runner import run_job
+from ..services.runner import get_runner
+from ..services.storage import get_storage
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -21,7 +24,6 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 # ---------------------------------------------------------------------------
 
 class RompParams(BaseModel):
-    """Optional ROMP config knobs. Defaults match generate_config.py."""
     obs: str | None = None
     obs_file_pattern: str | None = None
     obs_var: str | None = None
@@ -72,7 +74,7 @@ class JobOut(BaseModel):
 class ResultFile(BaseModel):
     name: str
     type: str   # "output" | "figure"
-    url: str    # relative URL to fetch the file
+    url: str
 
 
 class MetricStats(BaseModel):
@@ -94,15 +96,15 @@ class WindowMetrics(BaseModel):
 
 
 class GridInfo(BaseModel):
-    lats: list[float]   # all available latitude grid points (full domain)
-    lons: list[float]   # all available longitude grid points (full domain)
+    lats: list[float]
+    lons: list[float]
 
 
 class JobMetrics(BaseModel):
     job_id: str
     windows: list[WindowMetrics]
-    grid: GridInfo | None = None     # full-domain grid coordinates (never clipped)
-    bbox: dict | None = None         # actual extent after any clip
+    grid: GridInfo | None = None
+    bbox: dict | None = None
 
 
 class JobGridResponse(BaseModel):
@@ -112,7 +114,7 @@ class JobGridResponse(BaseModel):
     metric: str
     lats: list[float]
     lons: list[float]
-    values: list[list[float | None]]  # 2D array [lat][lon]
+    values: list[list[float | None]]
     unit: str
     min: float
     max: float
@@ -142,7 +144,6 @@ def _row_to_job_out(row: dict) -> JobOut:
 def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str:
     if obs_dir_override:
         return obs_dir_override
-    # Demo datasets are resolved from config, not the DB.
     if dataset_id.startswith("demo:"):
         demo_map = {d["id"]: d["obs_dir"] for d in get_demo_datasets()}
         obs_dir = demo_map.get(dataset_id)
@@ -150,15 +151,12 @@ def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str:
             raise HTTPException(status_code=400, detail=f"Unknown demo dataset: {dataset_id!r}")
         return obs_dir
     with get_db() as conn:
-        row = conn.execute("SELECT storage_key FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
+        row = conn.execute(
+            text("SELECT storage_key FROM datasets WHERE id = :id"), {"id": dataset_id}
+        ).mappings().fetchone()
     if not row or not row["storage_key"]:
         raise HTTPException(status_code=400, detail="Dataset has no storage_key")
-    key = row["storage_key"]
-    # from-path datasets store the absolute directory directly as storage_key
-    if Path(key).is_absolute():
-        return key
-    # upload-flow datasets store a relative file path — parent dir is the obs dir
-    return str((Path(settings.upload_dir) / key).parent)
+    return get_storage().resolve_obs_path(row["storage_key"])
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +165,6 @@ def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str:
 
 @router.get("/models")
 async def list_models():
-    """Return available model configurations for the UI."""
     return get_model_registry()
 
 
@@ -181,9 +178,9 @@ async def create_job(body: JobCreate, user: CurrentUser):
         def _check_dataset():
             with get_db() as conn:
                 row = conn.execute(
-                    "SELECT * FROM datasets WHERE id = ? AND user_id = ?",
-                    (body.dataset_id, user["id"]),
-                ).fetchone()
+                    text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
+                    {"id": body.dataset_id, "uid": user["id"]},
+                ).mappings().fetchone()
                 return dict(row) if row else None
 
         ds = await asyncio.to_thread(_check_dataset)
@@ -202,14 +199,11 @@ async def create_job(body: JobCreate, user: CurrentUser):
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
 
-    # Start from user-submitted params; inject registry-only fields the frontend
-    # doesn't expose (e.g. date_filter_year for fixed IFS/AIFS init schedules).
     romp_params = body.params.model_dump(exclude_none=True)
     for key in ("date_filter_year", "probabilistic", "members"):
         if key not in romp_params and model_cfg.get(key) is not None:
             romp_params[key] = model_cfg[key]
 
-    # Inject obs_file_pattern from demo dataset config if not already set.
     if "obs_file_pattern" not in romp_params and body.dataset_id.startswith("demo:"):
         demo_map = {d["id"]: d for d in get_demo_datasets()}
         demo = demo_map.get(body.dataset_id)
@@ -226,13 +220,17 @@ async def create_job(body: JobCreate, user: CurrentUser):
     def _insert():
         with get_db() as conn:
             conn.execute(
-                "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at, started_at) VALUES (?, ?, ?, 'running', ?, ?, ?)",
-                (job_id, user["id"], body.dataset_id, json.dumps(config), now, now),
+                text("INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at, started_at) "
+                     "VALUES (:id, :uid, :did, 'running', :cfg, :now, :now)"),
+                {"id": job_id, "uid": user["id"], "did": body.dataset_id,
+                 "cfg": json.dumps(config), "now": now},
             )
-            return dict(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+            return dict(conn.execute(
+                text("SELECT * FROM jobs WHERE id = :id"), {"id": job_id}
+            ).mappings().fetchone())
 
     row = await asyncio.to_thread(_insert)
-    run_job(job_id, config)
+    get_runner().run_job(job_id, config)
     return _row_to_job_out(row)
 
 
@@ -241,9 +239,9 @@ async def list_jobs(user: CurrentUser):
     def _list():
         with get_db() as conn:
             return [dict(r) for r in conn.execute(
-                "SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC",
-                (user["id"],),
-            ).fetchall()]
+                text("SELECT * FROM jobs WHERE user_id = :uid ORDER BY created_at DESC"),
+                {"uid": user["id"]},
+            ).mappings().fetchall()]
 
     rows = await asyncio.to_thread(_list)
     return [_row_to_job_out(r) for r in rows]
@@ -254,9 +252,9 @@ async def get_job(job_id: str, user: CurrentUser):
     def _get():
         with get_db() as conn:
             row = conn.execute(
-                "SELECT * FROM jobs WHERE id = ? AND user_id = ?",
-                (job_id, user["id"]),
-            ).fetchone()
+                text("SELECT * FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
+            ).mappings().fetchone()
             return dict(row) if row else None
 
     row = await asyncio.to_thread(_get)
@@ -270,16 +268,15 @@ async def get_logs(job_id: str, user: CurrentUser) -> dict:
     def _check():
         with get_db() as conn:
             return conn.execute(
-                "SELECT id FROM jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
+                text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
             ).fetchone()
 
     if not await asyncio.to_thread(_check):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    log_path = Path(settings.job_outputs_dir) / job_id / "run.log"
-    if not log_path.exists():
-        return {"logs": ""}
-    return {"logs": await asyncio.to_thread(log_path.read_text)}
+    logs = await asyncio.to_thread(get_storage().read_log, job_id)
+    return {"logs": logs}
 
 
 @router.get("/{job_id}/results", response_model=list[ResultFile])
@@ -287,8 +284,9 @@ async def get_results(job_id: str, user: CurrentUser):
     def _check():
         with get_db() as conn:
             row = conn.execute(
-                "SELECT status FROM jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
-            ).fetchone()
+                text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
+            ).mappings().fetchone()
             return dict(row) if row else None
 
     row = await asyncio.to_thread(_check)
@@ -297,22 +295,50 @@ async def get_results(job_id: str, user: CurrentUser):
     if row["status"] != "complete":
         raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
 
-    def _list_files():
-        job_dir = Path(settings.job_outputs_dir) / job_id
-        files = []
-        for kind in ("output", "figure"):
-            d = job_dir / kind
-            if d.exists():
-                for f in sorted(d.iterdir()):
-                    if f.is_file():
-                        files.append(ResultFile(
-                            name=f.name,
-                            type=kind,
-                            url=f"/jobs/{job_id}/results/{kind}/{f.name}",
-                        ))
-        return files
+    storage = get_storage()
+    files = await asyncio.to_thread(storage.list_result_files, job_id)
+    return [
+        ResultFile(
+            name=filename,
+            type=kind,
+            url=storage.generate_result_url(job_id, kind, filename),
+        )
+        for kind, filename in files
+    ]
 
-    return await asyncio.to_thread(_list_files)
+
+@router.get("/{job_id}/results/{kind}/{filename}")
+async def get_result_file(job_id: str, kind: str, filename: str, user: CurrentUser):
+    """Serve a result file — FileResponse locally, signed URL redirect in production."""
+    if kind not in ("output", "figure"):
+        raise HTTPException(status_code=400, detail="kind must be 'output' or 'figure'")
+
+    def _check_job():
+        with get_db() as conn:
+            return conn.execute(
+                text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
+            ).mappings().fetchone()
+
+    row = await asyncio.to_thread(_check_job)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if row["status"] != "complete":
+        raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
+
+    storage = get_storage()
+    local_path = storage.result_file_path(job_id, kind, filename)
+
+    if local_path is not None:
+        # Local dev: serve directly
+        if not local_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        from fastapi.responses import FileResponse
+        return FileResponse(local_path)
+    else:
+        # GCS: redirect to a signed URL
+        signed_url = await asyncio.to_thread(storage.generate_result_url, job_id, kind, filename)
+        return RedirectResponse(url=signed_url, status_code=302)
 
 
 @router.get("/{job_id}/metrics", response_model=JobMetrics)
@@ -324,16 +350,12 @@ async def get_metrics(
     lon_min: float | None = None,
     lon_max: float | None = None,
 ):
-    """Return spatial summary statistics for each metric in each verification window.
-
-    Optional bbox params lat_min/lat_max/lon_min/lon_max clip the spatial grid
-    before computing statistics, enabling subregion analysis.
-    """
     def _check():
         with get_db() as conn:
             row = conn.execute(
-                "SELECT status FROM jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
-            ).fetchone()
+                text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
+            ).mappings().fetchone()
             return dict(row) if row else None
 
     row = await asyncio.to_thread(_check)
@@ -352,30 +374,34 @@ async def get_metrics(
         except ImportError:
             raise HTTPException(status_code=503, detail="xarray not available on this server")
 
-        output_dir = Path(settings.job_outputs_dir) / job_id / "output"
-        if not output_dir.exists():
-            return JobMetrics(job_id=job_id, windows=[], bbox=None)
+        storage = get_storage()
 
-        UNIT_MAP = {
-            "false_alarm_rate": "fraction",
-            "miss_rate": "fraction",
-        }
+        # For GCS, we need to open the files via fsspec. For local, use the path directly.
+        if storage.is_local:
+            from ..services.storage import LocalStorage
+            output_dir = storage._outputs_dir / job_id / "output"
+            nc_files = sorted(output_dir.glob("spatial_metrics_*.nc")) if output_dir.exists() else []
+        else:
+            import gcsfs
+            fs = gcsfs.GCSFileSystem()
+            prefix = f"{storage._outputs_bucket}/{job_id}/output/spatial_metrics_"
+            nc_files = sorted(fs.glob(f"{prefix}*.nc"))
+            nc_files = [f"gs://{f}" for f in nc_files]
 
+        UNIT_MAP = {"false_alarm_rate": "fraction", "miss_rate": "fraction"}
         windows = []
         grid_info: GridInfo | None = None
         actual_bbox: dict | None = None
 
-        for nc_file in sorted(output_dir.glob("spatial_metrics_*.nc")):
+        for nc_file in nc_files:
             ds = xr.open_dataset(nc_file)
 
-            # Capture full grid from first file (before any clip)
             if grid_info is None and "lat" in ds.coords and "lon" in ds.coords:
                 grid_info = GridInfo(
                     lats=[float(v) for v in sorted(ds.lat.values)],
                     lons=[float(v) for v in sorted(ds.lon.values)],
                 )
 
-            # Apply bbox clip if requested
             if has_bbox:
                 lats = ds.lat.values
                 lons = ds.lon.values
@@ -385,7 +411,6 @@ async def get_metrics(
                 if lon_max is not None: lons = lons[lons <= lon_max]
                 ds = ds.sel(lat=lats, lon=lons)
 
-            # Record clipped extent from first file
             if actual_bbox is None and "lat" in ds.coords and "lon" in ds.coords:
                 lats = ds.lat.values
                 lons = ds.lon.values
@@ -439,12 +464,12 @@ async def get_grid(
     window: str,
     metric: str,
 ):
-    """Return raw grid values for a specific metric/model/window."""
     def _check():
         with get_db() as conn:
             row = conn.execute(
-                "SELECT status FROM jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
-            ).fetchone()
+                text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
+            ).mappings().fetchone()
             return dict(row) if row else None
 
     row = await asyncio.to_thread(_check)
@@ -460,19 +485,25 @@ async def get_grid(
         except ImportError:
             raise HTTPException(status_code=503, detail="xarray not available")
 
-        output_dir = Path(settings.job_outputs_dir) / job_id / "output"
-        if not output_dir.exists():
-            raise HTTPException(status_code=404, detail="No output found for this job")
-
-        # Match "spatial_metrics_{model}_{window}.nc"
-        # Normalize window label for filename (sometimes 1,15 in NetCDF attrs, but 1-15 in filenames)
+        storage = get_storage()
         w_alt = window.replace("-", ",")
-        matches = list(output_dir.glob(f"spatial_metrics_{model}_{window}.nc"))
-        if not matches:
-            matches = list(output_dir.glob(f"spatial_metrics_{model}_{w_alt}.nc"))
+
+        if storage.is_local:
+            output_dir = storage._outputs_dir / job_id / "output"
+            matches = list(output_dir.glob(f"spatial_metrics_{model}_{window}.nc"))
+            if not matches:
+                matches = list(output_dir.glob(f"spatial_metrics_{model}_{w_alt}.nc"))
+        else:
+            import gcsfs
+            fs = gcsfs.GCSFileSystem()
+            base = f"{storage._outputs_bucket}/{job_id}/output"
+            matches = fs.glob(f"{base}/spatial_metrics_{model}_{window}.nc")
+            if not matches:
+                matches = fs.glob(f"{base}/spatial_metrics_{model}_{w_alt}.nc")
+            matches = [f"gs://{f}" for f in matches]
 
         if not matches:
-             raise HTTPException(status_code=404, detail=f"Grid file for {model}/{window} not found")
+            raise HTTPException(status_code=404, detail=f"Grid file for {model}/{window} not found")
 
         ds = xr.open_dataset(matches[0])
         if metric not in ds.data_vars:
@@ -480,47 +511,30 @@ async def get_grid(
             raise HTTPException(status_code=404, detail=f"Metric {metric!r} not found in grid")
 
         da = ds[metric]
-        # Ensure we have exactly (lat, lon) dimensions in that order
         if "lat" in da.dims and "lon" in da.dims:
             da = da.transpose("lat", "lon")
-        
-        # Squeeze to remove any single-item dimensions (like time or window)
         da = da.squeeze()
-        
+
         lats = [float(v) for v in da.lat.values]
         lons = [float(v) for v in da.lon.values]
 
-        # Convert to 2D list. We replace NaNs with None for clean JSON serialization.
         arr = da.values.astype(float)
         if arr.ndim != 2:
             ds.close()
-            raise HTTPException(status_code=500, detail=f"Expected 2D array for metric, got {arr.ndim}D {arr.shape}")
-            
+            raise HTTPException(status_code=500, detail=f"Expected 2D array, got {arr.ndim}D {arr.shape}")
+
         values = np.where(np.isnan(arr), None, arr).tolist()
 
-        UNIT_MAP = {
-            "false_alarm_rate": "fraction",
-            "miss_rate": "fraction",
-        }
+        UNIT_MAP = {"false_alarm_rate": "fraction", "miss_rate": "fraction"}
         unit = UNIT_MAP.get(metric, "days")
-
-        # Use full dataarray for min/max to ensure we catch everything
         valid = arr[~np.isnan(arr)]
         v_min = float(valid.min()) if len(valid) > 0 else 0.0
         v_max = float(valid.max()) if len(valid) > 0 else 0.0
 
         ds.close()
         return JobGridResponse(
-            job_id=job_id,
-            model=model,
-            window=window,
-            metric=metric,
-            lats=lats,
-            lons=lons,
-            values=values,
-            unit=unit,
-            min=v_min,
-            max=v_max,
+            job_id=job_id, model=model, window=window, metric=metric,
+            lats=lats, lons=lons, values=values, unit=unit, min=v_min, max=v_max,
         )
 
     return await asyncio.to_thread(_load)
@@ -531,44 +545,23 @@ async def delete_job(job_id: str, user: CurrentUser):
     def _delete():
         with get_db() as conn:
             row = conn.execute(
-                "SELECT id FROM jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
+                text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
             ).fetchone()
             if not row:
                 return False
-            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            conn.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
             return True
 
     found = await asyncio.to_thread(_delete)
     if not found:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    import shutil
-    job_dir = Path(settings.job_outputs_dir) / job_id
-    if job_dir.exists():
-        await asyncio.to_thread(shutil.rmtree, job_dir)
-
-
-@router.get("/{job_id}/results/{kind}/{filename}")
-async def get_result_file(job_id: str, kind: str, filename: str, user: CurrentUser):
-    """Serve a result file (figure PNG or output NetCDF/CSV) by URL."""
-    if kind not in ("output", "figure"):
-        raise HTTPException(status_code=400, detail="kind must be 'output' or 'figure'")
-
-    def _check_job():
-        with get_db() as conn:
-            return conn.execute(
-                "SELECT status FROM jobs WHERE id = ? AND user_id = ?", (job_id, user["id"])
-            ).fetchone()
-
-    row = await asyncio.to_thread(_check_job)
-    if not row:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if row["status"] != "complete":
-        raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
-
-    file_path = Path(settings.job_outputs_dir) / job_id / kind / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-
-    from fastapi.responses import FileResponse
-    return FileResponse(file_path)
+    # Best-effort cleanup of output files
+    storage = get_storage()
+    if storage.is_local:
+        import shutil
+        job_dir = storage._outputs_dir / job_id
+        if job_dir.exists():
+            await asyncio.to_thread(shutil.rmtree, job_dir)
+    # GCS: let lifecycle rules handle expiry; no immediate deletion needed

@@ -7,6 +7,8 @@ terraform/terraform.tfstate*
 
 .env
 *.db
+*.db-shm
+*.db-wal
 job_outputs
 
 # Data archives

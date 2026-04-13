@@ -4,52 +4,70 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    db_path: str = "./almanac.db"
+    # ---------------------------------------------------------------------------
+    # Database
+    # Local dev: SQLite. Production: Cloud SQL PostgreSQL via Auth Proxy socket.
+    # ---------------------------------------------------------------------------
+    database_url: str = "sqlite:///./almanac.db"
+
+    # ---------------------------------------------------------------------------
+    # Storage backend
+    # "local" — filesystem under upload_dir / job_outputs_dir (dev default)
+    # "gcs"   — Google Cloud Storage (production)
+    # ---------------------------------------------------------------------------
+    storage_backend: str = "local"
     upload_dir: str = "./uploads"
     job_outputs_dir: str = "./job_outputs"
-    frontend_url: str = "http://localhost:5173"
-    cors_allow_all: bool = False
 
+    # GCS bucket names — required when storage_backend=gcs
+    gcs_data_bucket: str = ""
+    gcs_uploads_bucket: str = ""
+    gcs_outputs_bucket: str = ""
+
+    # ---------------------------------------------------------------------------
+    # Job runner
+    # "docker" — local Docker container (dev default)
+    # "batch"  — Google Cloud Batch (production)
+    # ---------------------------------------------------------------------------
+    job_runner: str = "docker"
     romp_image: str = "romp:latest"
     job_timeout_seconds: int = 3600
 
-    # Globus confidential client credentials — same client ID used by the frontend.
-    # Leave empty to run in stub mode (token value used as user ID).
+    # Cloud Batch settings — required when job_runner=batch
+    gcp_project: str = ""
+    gcp_region: str = "us-central1"
+    batch_worker_sa: str = ""
+
+    # ---------------------------------------------------------------------------
+    # Auth
+    # ---------------------------------------------------------------------------
+    frontend_url: str = "http://localhost:5173"
+    cors_allow_all: bool = False
     globus_client_id: str = ""
     globus_client_secret: str = ""
-    gcs_bucket_data: str = ""
 
-    # Demo observation datasets — shown to all users for testing.
-    # Add entries here for each pre-loaded obs directory on the server.
-    # Format: comma-separated "Name=path" or "Name=path|obs_file_pattern" pairs.
-    # e.g. demo_obs_datasets: str = "India Demo=/data/obs/india,IMD 1°=/data/imd/1p0|data_{}.nc"
-    demo_obs_datasets: str = (
-        "India Demo (1964–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/2p0|data_{}.nc,"
-        "India Demo (2013–2020)=/Users/hayden/code/ROMP/demo/data/obs,"
-        "Ethiopia (CHIRPS/IMERG 1998–2024)=/Users/hayden/code/ROMP/data/ethiopia/obs,"
-        "IMD India 0.25° (1901–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/0p25,"
-        "IMD India 1.0° (1901–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/1p0|data_{}.nc,"
-        "IMD India 2.0° (1901–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/2p0|data_{}.nc,"
-        "IMD India 4.0° (1901–2024)=/Users/hayden/code/ROMP/data/india/imd_rainfall_data/4p0"
-    )
+    # ---------------------------------------------------------------------------
+    # Demo datasets and model directories
+    # In production these are GCS URIs (gs://almanac-data/obs/... etc.).
+    # In local dev they are absolute paths on the developer's machine.
+    # ---------------------------------------------------------------------------
+    demo_obs_datasets: str = ""
 
-    # Model data directories — override per deployment via env vars.
-    aifs_model_dir: str = "/Users/hayden/code/ROMP/data/india/aifs"
-    aifs_daily_model_dir: str = "/Users/hayden/code/ROMP/data/india/aifs_daily"
-    ifs_model_dir: str = "/Users/hayden/code/ROMP/data/india/ifs"
-    neuralgcm_model_dir: str = "/Users/hayden/code/ROMP/data/india/neuralgcm"
-    fuxi_model_dir: str = "/Users/hayden/code/ROMP/data/india/fuxi"
-    graphcast_model_dir: str = "/Users/hayden/code/ROMP/data/india/graphcast"
-    gencast_model_dir: str = "/Users/hayden/code/ROMP/data/india/gencast"
-    fuxi_s2s_model_dir: str = "/Users/hayden/code/ROMP/data/india/fuxi_s2s"
+    aifs_model_dir: str = ""
+    aifs_daily_model_dir: str = ""
+    ifs_model_dir: str = ""
+    neuralgcm_model_dir: str = ""
+    fuxi_model_dir: str = ""
+    graphcast_model_dir: str = ""
+    gencast_model_dir: str = ""
+    fuxi_s2s_model_dir: str = ""
 
 
 settings = Settings()
 
+
 # ---------------------------------------------------------------------------
-# Model registry — static metadata + per-deployment directory paths.
-# Each entry maps to one selectable model in the UI. Models without a
-# configured model_dir are excluded from the GET /models response.
+# Model registry
 # ---------------------------------------------------------------------------
 
 def get_model_registry() -> list[dict]:
@@ -69,7 +87,7 @@ def get_model_registry() -> list[dict]:
             "start_date": "1964-05-01",
             "end_date": "2018-07-31",
             "start_year_clim": 1964,
-            "end_year_clim": 2018,  # clim end capped to data end
+            "end_year_clim": 2018,
         },
         {
             "id": "aifs_daily",
@@ -190,16 +208,14 @@ def get_model_registry() -> list[dict]:
             "end_year_clim": 2021,
         },
     ]
-    # Only expose models that have a configured data directory.
     return [m for m in candidates if m["model_dir"]]
 
 
 def get_demo_datasets() -> list[dict]:
-    """Parse demo_obs_datasets setting into a list of dataset descriptors.
-
-    Each entry is "Name=path" or "Name=path|obs_file_pattern".
-    The obs_file_pattern (e.g. "data_{}.nc") is passed to ROMP when a job is
-    submitted against this dataset, overriding the default "{}.nc" pattern.
+    """
+    Parse demo_obs_datasets setting into a list of dataset descriptors.
+    Format: comma-separated "Name=path" or "Name=path|obs_file_pattern" pairs.
+    Paths can be local filesystem paths (dev) or gs:// URIs (production).
     """
     result = []
     for entry in settings.demo_obs_datasets.split(","):
@@ -208,7 +224,6 @@ def get_demo_datasets() -> list[dict]:
             continue
         name, _, rest = entry.partition("=")
         name = name.strip()
-        # rest may be "path" or "path|obs_file_pattern"
         if "|" in rest:
             path, _, obs_file_pattern = rest.partition("|")
             path = path.strip()

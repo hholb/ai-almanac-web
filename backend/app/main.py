@@ -8,13 +8,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .database import init_db
 from .routers import datasets, jobs
+from .services.storage import get_storage
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await asyncio.to_thread(init_db)
-    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    Path(settings.job_outputs_dir).mkdir(parents=True, exist_ok=True)
+
+    # Create local directories only when running with the local storage backend.
+    storage = get_storage()
+    if storage.is_local:
+        Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+        Path(settings.job_outputs_dir).mkdir(parents=True, exist_ok=True)
+
     yield
 
 
@@ -40,16 +46,17 @@ async def health():
 # ---------------------------------------------------------------------------
 # Local file upload endpoint
 #
-# Accepts PUT /upload/{full_storage_key} and saves the body to disk under
-# settings.upload_dir.  In production this route is replaced by GCS signed
-# URLs — the client never talks to this endpoint in prod.
+# Only registered when STORAGE_BACKEND=local. In production, clients upload
+# directly to GCS via signed URLs — this endpoint is never used.
 # ---------------------------------------------------------------------------
 
-@app.put("/upload/{storage_key:path}", status_code=status.HTTP_200_OK)
-async def local_upload(storage_key: str, request: Request):
-    dest = Path(settings.upload_dir) / storage_key
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("wb") as f:
-        async for chunk in request.stream():
-            f.write(chunk)
-    return {"stored": str(dest)}
+storage = get_storage()
+if storage.is_local:
+    @app.put("/upload/{storage_key:path}", status_code=status.HTTP_200_OK)
+    async def local_upload(storage_key: str, request: Request):
+        dest = Path(settings.upload_dir) / storage_key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("wb") as f:
+            async for chunk in request.stream():
+                f.write(chunk)
+        return {"stored": str(dest)}
