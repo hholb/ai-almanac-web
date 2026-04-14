@@ -12,6 +12,7 @@ dependencies = [
     "google-cloud-run>=0.16.0",
     "google-cloud-storage>=3.10.1",
     "h5netcdf>=1.8.1",
+    "h5py>=3.16.0",
     "netcdf4>=1.7.4",
     "psycopg2-binary>=2.9.11",
     "pydantic-settings>=2.13.1",
