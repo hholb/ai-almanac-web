@@ -240,18 +240,25 @@ class CloudRunJobRunner(JobRunner):
             # execution_name is like projects/P/locations/R/jobs/J/executions/E
             execution_id = execution_name.split("/")[-1]
             entries = client.list_entries(
-                filter_=f'resource.type="cloud_run_job" AND labels."run.googleapis.com/execution_name"="{execution_id}" AND severity>=ERROR',
+                filter_=(
+                    f'resource.type="cloud_run_job" '
+                    f'AND labels."run.googleapis.com/execution_name"="{execution_id}"'
+                ),
                 order_by=gcloud_logging.DESCENDING,
-                page_size=20,
+                page_size=30,
             )
             lines = []
             for entry in entries:
                 payload = entry.payload
                 if isinstance(payload, str):
-                    lines.append(payload.strip())
+                    line = payload.strip()
                 elif isinstance(payload, dict):
-                    lines.append(str(payload.get("message", payload)).strip())
-                if len(lines) >= 10:
+                    line = str(payload.get("message", payload)).strip()
+                else:
+                    continue
+                if line:
+                    lines.append(line)
+                if len(lines) >= 20:
                     break
             if lines:
                 return "\n".join(reversed(lines))

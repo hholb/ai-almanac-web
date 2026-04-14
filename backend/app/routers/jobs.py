@@ -19,6 +19,35 @@ from ..services.storage import get_storage
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
+def _fetch_cloud_logs(job_id: str, max_entries: int = 200) -> str:
+    """Fetch container stdout/stderr from Cloud Logging for a Cloud Run Job task."""
+    try:
+        from google.cloud import logging as gcloud_logging
+        client = gcloud_logging.Client()
+        entries = client.list_entries(
+            filter_=(
+                f'resource.type="cloud_run_job" '
+                f'AND labels."run.googleapis.com/job_name"=~"romp-{job_id[:8]}"'
+            ),
+            order_by=gcloud_logging.ASCENDING,
+            page_size=max_entries,
+        )
+        lines = []
+        for entry in entries:
+            payload = entry.payload
+            if isinstance(payload, str):
+                text_line = payload.strip()
+            elif isinstance(payload, dict):
+                text_line = str(payload.get("message", payload)).strip()
+            else:
+                continue
+            if text_line:
+                lines.append(text_line)
+        return "\n".join(lines) if lines else "(no logs found)"
+    except Exception as exc:
+        return f"Could not fetch logs: {exc}"
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -272,7 +301,11 @@ async def get_logs(job_id: str, user: CurrentUser) -> dict:
     if not await asyncio.to_thread(_check):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    logs = await asyncio.to_thread(get_storage().read_log, job_id)
+    storage = get_storage()
+    if storage.is_local:
+        logs = await asyncio.to_thread(storage.read_log, job_id)
+    else:
+        logs = await asyncio.to_thread(_fetch_cloud_logs, job_id)
     return {"logs": logs}
 
 
