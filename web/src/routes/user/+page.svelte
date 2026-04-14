@@ -1,15 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { getManager } from "$lib/auth";
   import { isAuthenticated } from "$lib/auth-store";
-
-  onMount(() => {
-    const manager = getManager();
-    if (!manager?.authenticated) {
-      sessionStorage.setItem("auth_return_to", "/user");
-      manager?.login();
-    }
-  });
+  import LoginPrompt from "$lib/LoginPrompt.svelte";
 
   function logout() {
     getManager()?.revoke();
@@ -31,9 +23,7 @@
     </div>
   </div>
 {:else}
-  <div class="flex items-center justify-center min-h-[calc(100vh-3.5rem)] text-[var(--color-text-muted)] text-[0.95rem]">
-    <p>Redirecting to sign in…</p>
-  </div>
+  <LoginPrompt message="Sign in to view your account." />
 {/if}
 
 <style>

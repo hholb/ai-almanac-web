@@ -12,6 +12,7 @@
 
   let models = $state<ModelConfig[]>([]);
   let datasets = $state<Dataset[]>([]);
+  let dataLoaded = $state(false);
 
   onMount(async () => {
     if (!$isAuthenticated) return;
@@ -29,6 +30,7 @@
         form.obsFilePattern = first.obs_file_pattern ?? "";
       }
     }
+    dataLoaded = true;
   });
 
   onDestroy(() => store.stopPolling());
@@ -246,7 +248,7 @@
                 }}
               >
                 {#if datasets.length === 0}
-                  <option value="">Loading…</option>
+                  <option value="">{dataLoaded ? "No datasets available" : "Loading…"}</option>
                 {:else}
                   {@const demoDatasets = datasets.filter((d) => d.is_demo)}
                   {@const userDatasets = datasets.filter((d) => !d.is_demo)}
@@ -273,7 +275,7 @@
         <fieldset>
           <legend>Models</legend>
           {#if models.length === 0}
-            <p class="loading-hint">Loading models…</p>
+            <p class="loading-hint">{dataLoaded ? "No models available." : "Loading models…"}</p>
           {:else}
             <div class="model-chip-grid">
               {#each models as m}
