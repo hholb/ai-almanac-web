@@ -13,7 +13,8 @@
   import Fill from "ol/style/Fill";
   import Stroke from "ol/style/Stroke";
   import "ol/ol.css";
-  import { getJobGrid, type JobGridResponse, type Job } from "$lib/api";
+  import { type JobGridResponse, type Job } from "$lib/api";
+  import { getCachedJobGrid } from "$lib/benchmarks.svelte";
 
   type MetricDef = { value: string; label: string };
 
@@ -179,7 +180,7 @@
     const stops = getStops(metricValue, run.colorIndex);
     loading = new Set([...loading, key]);
     try {
-      const data = await getJobGrid(run.jobId, run.modelName, forecastWindow, metricValue);
+      const data = await getCachedJobGrid(run.jobId, run.modelName, forecastWindow, metricValue);
       const layer = buildLayer(data, stops);
       map.addLayer(layer);
       if (layers[key]) map.removeLayer(layers[key].layer);
@@ -290,8 +291,9 @@
   });
 
   $effect(() => {
-    jobIds; forecastWindow; // track these — reload when job set or window changes
-    if (jobs.length && forecastWindow && metrics.length && map) untrack(loadAll);
+    // Only trigger on job set or window changes — do NOT read jobs/metrics directly
+    // as that would re-run loadAll on every poll even when complete jobs are unchanged.
+    if (jobIds && forecastWindow && map) untrack(loadAll);
   });
 
   $effect(() => {

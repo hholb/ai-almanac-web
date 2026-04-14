@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { getJobMetrics, type JobMetrics, type WindowMetrics, type BboxFilter, type GridInfo } from "$lib/api";
+  import { type JobMetrics, type WindowMetrics, type BboxFilter, type GridInfo } from "$lib/api";
+  import { getCachedJobMetrics } from "$lib/benchmarks.svelte";
 
   type Props = { jobId: string };
   let { jobId }: Props = $props();
@@ -28,7 +29,7 @@
     loading = true;
     fetchError = null;
     try {
-      const data = await getJobMetrics(jobId, bbox);
+      const data = await getCachedJobMetrics(jobId, bbox);
       metricsData = data;
       if (data.grid && !grid) {
         grid = data.grid;

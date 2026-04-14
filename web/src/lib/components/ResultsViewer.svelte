@@ -38,7 +38,7 @@
   {/if}
 
   <div class="tables">
-    {#each jobs as job}
+    {#each jobs as job (job.id)}
       <div class="table-section">
         <p class="table-model">{job.model_name.toUpperCase()}</p>
         <MetricsTable jobId={job.id} />

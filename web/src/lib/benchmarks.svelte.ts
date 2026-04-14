@@ -1,8 +1,36 @@
 import { untrack } from "svelte";
 import {
-  getJobs, getJob, getJobMetrics, deleteJob, submitJob,
-  type Job, type JobParams, type JobMetrics,
+  getJobs, getJob, getJobMetrics, getJobGrid, deleteJob, submitJob,
+  type Job, type JobParams, type JobMetrics, type BboxFilter, type JobGridResponse,
 } from "./api";
+
+// Module-level cache so metrics survive component unmount/remount.
+// Only caches the no-bbox baseline fetch — bbox-filtered requests always go to the server.
+const _metricsCache = new Map<string, JobMetrics>();
+
+export async function getCachedJobMetrics(jobId: string, bbox?: BboxFilter): Promise<JobMetrics> {
+  if (!bbox) {
+    const hit = _metricsCache.get(jobId);
+    if (hit) return hit;
+    const data = await getJobMetrics(jobId);
+    _metricsCache.set(jobId, data);
+    return data;
+  }
+  return getJobMetrics(jobId, bbox);
+}
+
+const _gridCache = new Map<string, JobGridResponse>();
+
+export async function getCachedJobGrid(
+  jobId: string, model: string, window: string, metric: string
+): Promise<JobGridResponse> {
+  const key = `${jobId}||${model}||${window}||${metric}`;
+  const hit = _gridCache.get(key);
+  if (hit) return hit;
+  const data = await getJobGrid(jobId, model, window, metric);
+  _gridCache.set(key, data);
+  return data;
+}
 
 export type { Job };
 
@@ -102,9 +130,10 @@ export class BenchmarkStore {
       const running = untrack(() => this.jobs.filter((j) => j.status === "running"));
       if (running.length === 0) return;
       const updated = await Promise.all(running.map((j) => getJob(j.id)));
-      this.jobs = untrack(() =>
-        this.jobs.map((j) => updated.find((u) => u.id === j.id) ?? j)
-      );
+      for (const u of updated) {
+        const idx = untrack(() => this.jobs.findIndex((j) => j.id === u.id));
+        if (idx !== -1) this.jobs[idx] = u;
+      }
     }, 3000);
   }
 
