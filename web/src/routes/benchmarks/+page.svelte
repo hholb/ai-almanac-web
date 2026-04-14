@@ -65,6 +65,28 @@
   let submitting = $state(false);
   let submitError = $state<string | null>(null);
 
+  // ---- Model reference catalog -----------------------------------------------
+
+  const MODEL_CATALOG: Record<string, {
+    type: string; forecast: string; resolution: string; period: string; desc: string;
+  }> = {
+    ifs:       { type: "NWP",  forecast: "Probabilistic · 11 members", resolution: "~32 km", period: "2004–2023",            desc: "ECMWF's operational Integrated Forecasting System — the primary physics-based NWP baseline." },
+    aifs:      { type: "AIWP", forecast: "Deterministic",              resolution: "0.25°",  period: "1965–2024",            desc: "ECMWF's AI Weather Prediction model. Fine-tuned on IFS analyses (2016–2022). Daily-initialized runs available 2019–2024; all others are twice-weekly." },
+    fuxi:      { type: "AIWP", forecast: "Deterministic",              resolution: "0.25°",  period: "1965–2024",            desc: "Fudan University AI model trained on ERA5 (1979–2017). Twice-weekly initializations on Mondays and Thursdays." },
+    graphcast: { type: "AIWP", forecast: "Deterministic",              resolution: "0.25°",  period: "1965–2024",            desc: "Google DeepMind graph neural network model trained on ERA5 (1979–2017). Twice-weekly initializations." },
+    gencast:   { type: "AIWP", forecast: "Probabilistic · 51 members", resolution: "0.25°",  period: "1965–1978, 2019–2024", desc: "Google DeepMind generative ensemble model trained on ERA5 (1979–2018). Note the gap in hindcast coverage." },
+    fuxis2s:   { type: "AIWP", forecast: "Probabilistic · 51 members", resolution: "1.5°",   period: "2002–2021",            desc: "Fudan University sub-seasonal-to-seasonal model. Coarser resolution optimized for extended-range (weeks 2–4) prediction. Trained on ERA5 (1950–2016)." },
+    ngcm:      { type: "AIWP", forecast: "Probabilistic · 51 members", resolution: "2.8°",   period: "1965–2024",            desc: "Google's Neural GCM — hybrid physics-ML architecture trained 2001–2018. Available April–July only. Twice-weekly initializations." },
+  };
+
+  function lookupModel(id: string) {
+    const normalized = id.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const entry = Object.entries(MODEL_CATALOG).find(
+      ([k]) => normalized.includes(k) || k.includes(normalized)
+    );
+    return entry?.[1] ?? null;
+  }
+
   function toggleModel(id: string) {
     if (selectedModelIds.includes(id)) {
       selectedModelIds = selectedModelIds.filter((m) => m !== id);
@@ -279,26 +301,59 @@
           {:else}
             <div class="model-chip-grid">
               {#each models as m}
+                {@const info = lookupModel(m.id)}
                 <button
                   type="button"
                   class="model-chip"
                   class:active={selectedModelIds.includes(m.id)}
                   onclick={() => toggleModel(m.id)}
+                  title={info?.desc}
                 >
                   <span class="chip-name">{m.display_name}</span>
+                  <span class="chip-meta">
+                    {info?.type ?? m.model_type} · {info?.resolution ?? ""}
+                    {m.probabilistic ? ` · ${m.members ?? "?"} mbr` : ""}
+                  </span>
                   <span class="chip-years">{m.start_date.slice(0,4)}–{m.end_date.slice(0,4)}</span>
                 </button>
               {/each}
             </div>
+
+            <details class="model-reference">
+              <summary>Model reference</summary>
+              <div class="model-ref-body">
+                {#each models as m}
+                  {@const info = lookupModel(m.id)}
+                  <div class="model-ref-row" class:ref-selected={selectedModelIds.includes(m.id)}>
+                    <div class="ref-header">
+                      <span class="ref-name">{m.display_name}</span>
+                      <span class="ref-badge ref-badge-{(info?.type ?? m.model_type).toLowerCase()}">{info?.type ?? m.model_type}</span>
+                      <span class="ref-forecast">{info?.forecast ?? (m.probabilistic ? `Probabilistic · ${m.members ?? "?"} members` : "Deterministic")}</span>
+                      <span class="ref-res">{info?.resolution ?? "—"}</span>
+                      <span class="ref-period">{info?.period ?? `${m.start_date.slice(0,4)}–${m.end_date.slice(0,4)}`}</span>
+                    </div>
+                    {#if info?.desc}
+                      <p class="ref-desc">{info.desc}</p>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </details>
           {/if}
         </fieldset>
 
         <fieldset>
           <legend>Parameters</legend>
           <div class="field-row">
-            <label>Region <input bind:value={form.region} required /></label>
-            <label>Start Date <input type="date" bind:value={form.startDate} required /></label>
-            <label>End Date <input type="date" bind:value={form.endDate} required /></label>
+            <label><span class="label-text">Region <span class="tip" data-tip="Geographic domain for onset evaluation (e.g. 'India', 'Ethiopia')">ⓘ</span></span>
+              <input bind:value={form.region} required />
+            </label>
+            <label><span class="label-text">Start Date <span class="tip" data-tip="Start of the evaluation window">ⓘ</span></span>
+              <input type="date" bind:value={form.startDate} required />
+            </label>
+            <label><span class="label-text">End Date <span class="tip" data-tip="End of the evaluation window. Must fall within the selected models' hindcast periods.">ⓘ</span></span>
+              <input type="date" bind:value={form.endDate} required />
+            </label>
           </div>
         </fieldset>
 
@@ -306,11 +361,19 @@
           <summary>Common Options</summary>
           <fieldset class="nested-fieldset">
             <div class="field-row">
-              <label>Clim Start Year <input type="number" bind:value={form.startYearClim} /></label>
-              <label>Clim End Year <input type="number" bind:value={form.endYearClim} /></label>
-              <label>Max Forecast Day <input type="number" bind:value={form.maxForecastDay} placeholder="optional" /></label>
-              <label>Init Days <input bind:value={form.initDays} placeholder="e.g. 2,5" /></label>
-              <label class="checkbox-label"><input type="checkbox" bind:checked={form.parallel} /> Parallel</label>
+              <label><span class="label-text">Clim Start Year <span class="tip" data-tip="First year of the climatology baseline used to compute local wet-spell thresholds for onset detection">ⓘ</span></span>
+                <input type="number" bind:value={form.startYearClim} />
+              </label>
+              <label><span class="label-text">Clim End Year <span class="tip" data-tip="Last year of climatology baseline — should end before the evaluation window starts">ⓘ</span></span>
+                <input type="number" bind:value={form.endYearClim} />
+              </label>
+              <label><span class="label-text">Max Forecast Day <span class="tip" data-tip="Cap the lead time evaluated (days). Leave blank to include all available forecast days.">ⓘ</span></span>
+                <input type="number" bind:value={form.maxForecastDay} placeholder="optional" />
+              </label>
+              <label><span class="label-text">Init Days <span class="tip" data-tip="Comma-separated initialization day offsets within each week. '2,5' corresponds to Mon/Thu twice-weekly runs.">ⓘ</span></span>
+                <input bind:value={form.initDays} placeholder="e.g. 2,5" />
+              </label>
+              <label class="checkbox-label"><input type="checkbox" bind:checked={form.parallel} /> <span class="label-text">Parallel <span class="tip" data-tip="Process multiple model initializations concurrently for faster throughput">ⓘ</span></span></label>
             </div>
           </fieldset>
         </details>
@@ -384,6 +447,17 @@
           </fieldset>
         </details>
 
+        <div class="tips-panel">
+          <p class="tips-heading">Quick start tips</p>
+          <ul class="tips-list">
+            <li>Select multiple models to compare them side by side in the same run set.</li>
+            <li>Make sure your evaluation dates fall within all selected models' hindcast periods (shown in the model reference above).</li>
+            <li>Most models initialize twice weekly (Mon/Thu) — the default init days of "2,5" reflects this. AIFS daily uses consecutive days.</li>
+            <li>Climatology years define the local wet-spell threshold for onset detection. A 3–5 year window ending before your evaluation start is typical.</li>
+            <li>For India, onset uses the Moron &amp; Robertson definition (Modified MOK, anchored to June 2). For Ethiopia, it uses the ICPAC 3-day accumulation threshold.</li>
+          </ul>
+        </div>
+
         {#if submitError}
           <p class="form-error">{submitError}</p>
         {/if}
@@ -454,7 +528,8 @@
 
     {:else}
       <div class="empty-state">
-        <p class="muted">Select a run set from the sidebar or create a new one.</p>
+        <p class="empty-title">No run set selected</p>
+        <p class="muted">Click <strong>+ New Run Set</strong> in the sidebar to benchmark one or more models against ground-truth observations. Select a region, date range, and at least one model — results include spatial maps and per-grid-point skill metrics (MAE, FAR, MR) across forecast lead-time windows.</p>
       </div>
     {/if}
 
@@ -744,8 +819,182 @@
     color: var(--color-accent);
   }
   .chip-name { font-size: 0.78rem; font-weight: 600; }
+  .chip-meta { font-size: 0.6rem; font-family: var(--font-mono); opacity: 0.65; }
   .chip-years { font-size: 0.62rem; font-family: var(--font-mono); opacity: 0.75; }
   .model-chip.active .chip-years { opacity: 0.9; }
+  .model-chip.active .chip-meta { opacity: 0.8; }
+
+  /* ---- Model reference ---- */
+  .model-reference {
+    margin-top: 0.75rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.35rem;
+    overflow: hidden;
+  }
+  .model-reference > summary {
+    padding: 0.45rem 0.75rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--color-text-dim);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    background: var(--color-surface);
+    transition: background-color 0.12s;
+  }
+  .model-reference > summary::-webkit-details-marker { display: none; }
+  .model-reference[open] > summary { border-bottom: 1px solid var(--color-border-subtle); }
+  .model-reference > summary:hover { background: var(--color-accent-glow); }
+
+  .model-ref-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .model-ref-row {
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--color-border-subtle);
+    transition: background-color 0.1s;
+  }
+  .model-ref-row:last-child { border-bottom: none; }
+  .model-ref-row.ref-selected { background: var(--color-accent-light); }
+
+  .ref-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.2rem;
+  }
+  .ref-name {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--color-text);
+    min-width: 90px;
+  }
+  .ref-badge {
+    font-size: 0.58rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.2rem;
+  }
+  .ref-badge-nwp  { background: #dbeafe; color: #1e40af; }
+  .ref-badge-aiwp { background: #dcfce7; color: #166534; }
+  .ref-forecast {
+    font-size: 0.7rem;
+    color: var(--color-text-muted);
+  }
+  .ref-res, .ref-period {
+    font-size: 0.68rem;
+    font-family: var(--font-mono);
+    color: var(--color-text-dim);
+    padding: 0.05rem 0.35rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.2rem;
+  }
+  .ref-desc {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--color-text-dim);
+    line-height: 1.4;
+  }
+
+  /* ---- Tooltip icon ---- */
+  .label-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .tip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 0.9rem;
+    height: 0.9rem;
+    font-size: 0.58rem;
+    font-style: normal;
+    font-weight: 600;
+    color: var(--color-text-dim);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 50%;
+    cursor: help;
+    line-height: 1;
+    transition: color 0.12s, border-color 0.12s;
+    flex-shrink: 0;
+    vertical-align: middle;
+  }
+  .tip:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 220px;
+    padding: 0.45rem 0.6rem;
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--color-text-muted);
+    line-height: 1.45;
+    white-space: normal;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 200;
+    text-align: left;
+  }
+  .tip:hover::after {
+    opacity: 1;
+  }
+
+  /* ---- Tips panel ---- */
+  .tips-panel {
+    background: var(--color-accent-light);
+    border: 1px solid var(--color-accent);
+    border-left-width: 3px;
+    border-radius: 0.4rem;
+    padding: 0.75rem 1rem;
+  }
+  .tips-heading {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-accent);
+    margin: 0 0 0.4rem;
+  }
+  .tips-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .tips-list li {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    line-height: 1.4;
+  }
+
+  /* ---- Empty state ---- */
+  .empty-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    margin: 0 0 0.5rem;
+  }
 
   .model-fieldset-header {
     display: flex;

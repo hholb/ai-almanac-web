@@ -198,6 +198,33 @@
     </label>
   </div>
 
+  <!-- Metric glossary -->
+  <details class="metric-glossary">
+    <summary>About these metrics</summary>
+    <div class="glossary-grid">
+      <div class="glossary-item">
+        <span class="g-term">MAE</span>
+        <span class="g-def"><strong>Mean Absolute Error</strong> — average absolute difference in days between the model's predicted monsoon onset and the ground-truth observed onset, averaged across all model initializations for a year. <em>Lower is better.</em></span>
+      </div>
+      <div class="glossary-item">
+        <span class="g-term">FAR</span>
+        <span class="g-def"><strong>False Alarm Rate</strong> — fraction of forecast windows where the model predicts onset but no onset actually occurs (FP ÷ (FP + TN)). A model that over-predicts onset will score high here. <em>Lower is better.</em></span>
+      </div>
+      <div class="glossary-item">
+        <span class="g-term">MR</span>
+        <span class="g-def"><strong>Miss Rate</strong> — fraction of forecast windows where onset occurs but the model fails to predict it (FN ÷ actual onsets). A model that under-predicts onset will score high here. <em>Lower is better.</em></span>
+      </div>
+      <div class="glossary-item">
+        <span class="g-term">Days 1–15 / 16–30</span>
+        <span class="g-def"><strong>Forecast window</strong> — lead-time range in days. Each window groups all model initializations whose forecast horizon falls within that range, summarizing skill at near-term vs. extended-range prediction.</span>
+      </div>
+      <div class="glossary-item">
+        <span class="g-term">Statistics</span>
+        <span class="g-def">Columns show the distribution of the metric <em>across grid points</em>: Mean, Min, Median (P50), P75, P90, and Max. Heat coloring indicates relative performance — greener cells are lower values within each row's range.</span>
+      </div>
+    </div>
+  </details>
+
   <!-- Metrics tables -->
   {#if loading}
     <p class="loading">Loading metrics…</p>
@@ -443,4 +470,55 @@
 
   tbody tr:last-child td { border-bottom: none; }
   tbody tr:hover td { background-color: var(--color-accent-glow) !important; }
+
+  /* ---- Metric glossary ---- */
+  .metric-glossary {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.4rem;
+    overflow: hidden;
+  }
+  .metric-glossary > summary {
+    padding: 0.45rem 0.75rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--color-text-dim);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    background: var(--color-surface);
+    transition: background-color 0.12s;
+  }
+  .metric-glossary > summary::-webkit-details-marker { display: none; }
+  .metric-glossary[open] > summary { border-bottom: 1px solid var(--color-border-subtle); }
+  .metric-glossary > summary:hover { background: var(--color-accent-glow); }
+
+  .glossary-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .glossary-item {
+    display: flex;
+    gap: 0.85rem;
+    align-items: baseline;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+  .glossary-item:last-child { border-bottom: none; }
+
+  .g-term {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--color-accent);
+    min-width: 90px;
+    flex-shrink: 0;
+  }
+  .g-def {
+    font-size: 0.74rem;
+    color: var(--color-text-muted);
+    line-height: 1.45;
+  }
+  .g-def strong { color: var(--color-text); font-weight: 600; }
+  .g-def em { font-style: normal; color: var(--color-text-dim); }
 </style>
