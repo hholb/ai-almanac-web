@@ -45,6 +45,13 @@ resource "google_service_account_iam_member" "backend_acts_as_worker" {
   member             = "serviceAccount:${google_service_account.backend.email}"
 }
 
+# Allow CI to deploy new image revisions to Cloud Run
+resource "google_project_iam_member" "ci_run_developer" {
+  project = var.project_id
+  role    = "roles/run.developer"
+  member  = "serviceAccount:${google_service_account.ci.email}"
+}
+
 output "batch_worker_service_account" {
   value = google_service_account.batch_worker.email
 }
