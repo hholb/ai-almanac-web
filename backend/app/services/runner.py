@@ -124,10 +124,10 @@ class DockerRunner(JobRunner):
 
 
 # ---------------------------------------------------------------------------
-# Cloud Batch runner (production)
+# Cloud Run Jobs runner (production)
 # ---------------------------------------------------------------------------
 
-class BatchRunner(JobRunner):
+class CloudRunJobRunner(JobRunner):
     def __init__(
         self,
         romp_image: str,
@@ -149,123 +149,109 @@ class BatchRunner(JobRunner):
         t.start()
 
     def _submit(self, job_id: str, config: dict) -> None:
-        from google.cloud import batch_v1
+        from google.cloud import run_v2
         from google.protobuf import duration_pb2
 
-        client = batch_v1.BatchServiceClient()
-
         romp_params = config.get("romp_params", {})
-        env_vars = {
-            "ROMP_OBS_DIR":    "/mnt/obs",
-            "ROMP_MODEL_DIR":  "/mnt/model",
-            "ROMP_MODEL_NAME": config["model_name"],
-            "ROMP_DIR_OUT":    "/mnt/output",
-            "ROMP_DIR_FIG":    "/mnt/figure",
-            **{f"ROMP_{k.upper()}": str(v) for k, v in romp_params.items() if v is not None},
-        }
 
-        # Parse GCS URIs: gs://bucket/prefix -> (bucket, prefix)
-        def _parse_gcs(uri: str) -> tuple[str, str]:
-            parts = uri.removeprefix("gs://").split("/", 1)
-            return parts[0], (parts[1] if len(parts) > 1 else "")
+        # Build GCS volumes and derive container-local paths from gs:// URIs.
+        # One volume per unique bucket, mounted at /mnt/{bucket-name}.
+        volumes: list[run_v2.Volume] = []
+        volume_mounts: list[run_v2.VolumeMount] = []
 
-        obs_bucket, obs_prefix   = _parse_gcs(config["obs_dir"])
-        model_bucket, model_prefix = _parse_gcs(config["model_dir"])
-        out_prefix  = f"{job_id}/output"
-        fig_prefix  = f"{job_id}/figure"
+        def _local_path(uri: str, read_only: bool) -> str:
+            bucket, _, prefix = uri.removeprefix("gs://").partition("/")
+            if not any(v.name == bucket for v in volumes):
+                volumes.append(run_v2.Volume(
+                    name=bucket,
+                    gcs=run_v2.GCSVolumeSource(bucket=bucket, read_only=read_only),
+                ))
+                volume_mounts.append(run_v2.VolumeMount(
+                    name=bucket, mount_path=f"/mnt/{bucket}",
+                ))
+            return f"/mnt/{bucket}/{prefix}".rstrip("/")
 
-        def _gcs_volume(bucket: str, prefix: str, mount_path: str, readonly: bool):
-            v = batch_v1.Volume()
-            v.gcs = batch_v1.GCS(remote_path=f"{bucket}/{prefix}".rstrip("/"))
-            v.mount_path = mount_path
-            v.mount_options = ["implicit-dirs"] + (["ro"] if readonly else [])
-            return v
+        obs_local   = _local_path(config["obs_dir"],   read_only=True)
+        model_local = _local_path(config["model_dir"], read_only=True)
+        _local_path(f"gs://{self._outputs_bucket}/",   read_only=False)
 
-        volumes = [
-            _gcs_volume(obs_bucket,            obs_prefix,   "/mnt/obs",    readonly=True),
-            _gcs_volume(model_bucket,          model_prefix, "/mnt/model",  readonly=True),
-            _gcs_volume(self._outputs_bucket,  out_prefix,   "/mnt/output", readonly=False),
-            _gcs_volume(self._outputs_bucket,  fig_prefix,   "/mnt/figure", readonly=False),
+        env_vars = [
+            run_v2.EnvVar(name="ROMP_OBS_DIR",    value=obs_local),
+            run_v2.EnvVar(name="ROMP_MODEL_DIR",  value=model_local),
+            run_v2.EnvVar(name="ROMP_MODEL_NAME", value=config["model_name"]),
+            run_v2.EnvVar(name="ROMP_DIR_OUT",    value=f"/mnt/{self._outputs_bucket}/{job_id}/output"),
+            run_v2.EnvVar(name="ROMP_DIR_FIG",    value=f"/mnt/{self._outputs_bucket}/{job_id}/figure"),
+            *[run_v2.EnvVar(name=f"ROMP_{k.upper()}", value=str(v))
+              for k, v in romp_params.items() if v is not None],
         ]
 
-        runnable = batch_v1.Runnable(
-            container=batch_v1.Runnable.Container(
-                image_uri=self._image,
-                entrypoint="",
-            ),
-            environment=batch_v1.Environment(variables=env_vars),
-        )
+        job_name = f"romp-{job_id.replace('_', '-')}"[:49]
+        parent   = f"projects/{self._project}/locations/{self._region}"
 
-        task_spec = batch_v1.TaskSpec(
-            runnables=[runnable],
-            volumes=volumes,
-            max_retry_count=0,
-            max_run_duration=duration_pb2.Duration(seconds=self._timeout),
-        )
-
-        job = batch_v1.Job(
-            task_groups=[batch_v1.TaskGroup(
-                task_spec=task_spec,
-                task_count=1,
-            )],
-            allocation_policy=batch_v1.AllocationPolicy(
-                instances=[batch_v1.AllocationPolicy.InstancePolicyOrTemplate(
-                    policy=batch_v1.AllocationPolicy.InstancePolicy(
-                        machine_type="n2-standard-4",
-                        provisioning_model=batch_v1.AllocationPolicy.ProvisioningModel.SPOT,
-                    ),
-                )],
-                service_account=batch_v1.ServiceAccount(email=self._worker_sa),
-            ),
-            logs_policy=batch_v1.LogsPolicy(
-                destination=batch_v1.LogsPolicy.Destination.CLOUD_LOGGING,
+        cloud_run_job = run_v2.Job(
+            template=run_v2.ExecutionTemplate(
+                template=run_v2.TaskTemplate(
+                    containers=[run_v2.Container(
+                        image=self._image,
+                        env=env_vars,
+                        volume_mounts=volume_mounts,
+                        resources=run_v2.ResourceRequirements(
+                            limits={"cpu": "4", "memory": "8Gi"},
+                        ),
+                    )],
+                    volumes=volumes,
+                    service_account=self._worker_sa,
+                    max_retries=0,
+                    timeout=duration_pb2.Duration(seconds=self._timeout),
+                ),
             ),
         )
 
-        parent = f"projects/{self._project}/locations/{self._region}"
-        # Cloud Batch job IDs must be lowercase alphanumeric + hyphens, max 63 chars.
-        batch_job_id = f"romp-{job_id.replace('_', '-')}"[:63]
+        jobs_client = run_v2.JobsClient()
+        execution_name: str | None = None
 
         try:
-            client.create_job(parent=parent, job=job, job_id=batch_job_id)
-            logger.info("Submitted Cloud Batch job %s for job_id %s", batch_job_id, job_id)
-            # Poll for completion in a background thread.
-            self._poll(job_id, parent, batch_job_id, client)
+            jobs_client.create_job(
+                parent=parent, job=cloud_run_job, job_id=job_name,
+            ).result()
+            logger.info("Created Cloud Run Job %s for job_id %s", job_name, job_id)
+
+            execution = jobs_client.run_job(
+                name=f"{parent}/jobs/{job_name}",
+            ).result()
+            execution_name = execution.name
+            logger.info("Started execution %s", execution_name)
+
+            self._poll(job_id, execution_name)
+
         except Exception as exc:
             _update_status(job_id, "failed", error=str(exc))
-            logger.exception("Failed to submit Batch job for %s", job_id)
-
-    def _poll(
-        self,
-        job_id: str,
-        parent: str,
-        batch_job_id: str,
-        client,
-    ) -> None:
-        import time
-        from google.cloud import batch_v1
-
-        job_name = f"{parent}/jobs/{batch_job_id}"
-        while True:
-            time.sleep(30)
+            logger.exception("Cloud Run Job failed for %s", job_id)
+        finally:
             try:
-                batch_job = client.get_job(name=job_name)
-                state = batch_job.status.state
-                if state == batch_v1.JobStatus.State.SUCCEEDED:
+                jobs_client.delete_job(name=f"{parent}/jobs/{job_name}").result()
+            except Exception:
+                pass
+
+    def _poll(self, job_id: str, execution_name: str) -> None:
+        import time
+        from google.cloud import run_v2
+
+        client = run_v2.ExecutionsClient()
+        while True:
+            time.sleep(15)
+            try:
+                ex = client.get_execution(name=execution_name)
+                if ex.succeeded_count > 0:
                     _update_status(job_id, "complete")
-                    logger.info("Batch job %s succeeded", batch_job_id)
+                    logger.info("Execution %s succeeded", execution_name)
                     return
-                if state in (
-                    batch_v1.JobStatus.State.FAILED,
-                    batch_v1.JobStatus.State.DELETION_IN_PROGRESS,
-                ):
-                    msg = f"Batch job state: {state.name}"
-                    _update_status(job_id, "failed", error=msg)
-                    logger.error("Batch job %s failed: %s", batch_job_id, msg)
+                if ex.failed_count > 0:
+                    _update_status(job_id, "failed", error="Cloud Run Job task failed — check Cloud Logging")
+                    logger.error("Execution %s failed", execution_name)
                     return
-                # QUEUED / SCHEDULED / RUNNING — keep polling
             except Exception as exc:
-                logger.exception("Error polling Batch job %s: %s", batch_job_id, exc)
+                logger.exception("Error polling execution %s: %s", execution_name, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +296,8 @@ def _make_runner() -> JobRunner:
     from .storage import get_storage
 
     runner = settings.job_runner.lower()
-    if runner == "batch":
-        return BatchRunner(
+    if runner in ("cloudrun", "batch"):
+        return CloudRunJobRunner(
             romp_image=settings.romp_image,
             job_timeout_seconds=settings.job_timeout_seconds,
             project=settings.gcp_project,

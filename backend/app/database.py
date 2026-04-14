@@ -75,7 +75,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS jobs (
                 id           TEXT PRIMARY KEY,
                 user_id      TEXT NOT NULL REFERENCES users(id),
-                dataset_id   TEXT NOT NULL REFERENCES datasets(id),
+                dataset_id   TEXT NOT NULL,
                 status       TEXT NOT NULL DEFAULT 'queued',
                 config_json  TEXT,
                 created_at   TEXT NOT NULL,
@@ -84,6 +84,16 @@ def init_db() -> None:
                 error        TEXT
             )
         """))
+        # Drop the FK constraint on dataset_id if it exists from an earlier schema.
+        # Demo datasets are config-driven and never stored in the datasets table,
+        # so the constraint causes an IntegrityError on PostgreSQL for every demo job.
+        # The endpoint validates dataset existence before inserting, making the FK redundant.
+        try:
+            conn.execute(text(
+                "ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_dataset_id_fkey"
+            ))
+        except Exception:
+            pass  # SQLite does not support this syntax — safe to ignore
 
 
 def get_or_create_user(conn, external_id: str, email: str | None = None) -> dict:

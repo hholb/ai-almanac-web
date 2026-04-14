@@ -22,6 +22,37 @@ resource "google_artifact_registry_repository_iam_member" "cloud_run_pull" {
   member     = "serviceAccount:service-${data.google_project.project.number}@serverless-robot-prod.iam.gserviceaccount.com"
 }
 
+# Cloud Run Jobs pulls images using the job's service account (batch_worker)
+resource "google_artifact_registry_repository_iam_member" "batch_worker_pull" {
+  location   = var.region
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.batch_worker.email}"
+}
+
+# Service account for GitHub Actions CI to push images
+resource "google_service_account" "ci" {
+  account_id   = "almanac-ci"
+  display_name = "Almanac CI (GitHub Actions image push)"
+}
+
+resource "google_artifact_registry_repository_iam_member" "ci_push" {
+  location   = var.region
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.ci.email}"
+}
+
+resource "google_service_account_iam_member" "ci_token_creator" {
+  service_account_id = google_service_account.ci.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.ci.email}"
+}
+
+output "ci_service_account_email" {
+  value = google_service_account.ci.email
+}
+
 data "google_project" "project" {
   project_id = var.project_id
 }
@@ -33,5 +64,5 @@ locals {
 
   frontend_image = var.frontend_image != "" ? var.frontend_image : "${local.ar_prefix}/almanac-frontend:latest"
   backend_image  = var.backend_image != "" ? var.backend_image : "${local.ar_prefix}/almanac-backend:latest"
-  romp_image     = var.romp_image != "" ? var.romp_image : "ghcr.io/${var.ghcr_owner}/romp:latest"
+  romp_image     = var.romp_image != "" ? var.romp_image : "${local.ar_prefix}/romp:latest"
 }

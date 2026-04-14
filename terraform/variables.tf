@@ -69,3 +69,52 @@ variable "job_output_retention_days" {
   type        = number
   default     = 30
 }
+
+# ---------------------------------------------------------------------------
+# Job runner / data config
+# ---------------------------------------------------------------------------
+
+variable "job_runner" {
+  description = "Job runner backend: 'cloudrun' (production) or 'docker' (local dev)"
+  type        = string
+  default     = "cloudrun"
+}
+
+variable "demo_obs_datasets" {
+  description = "Comma-separated demo obs datasets. Format: 'Name=gs://path|obs_file_pattern,...'"
+  type        = string
+  default     = ""
+}
+
+variable "aifs_model_dir" {
+  type    = string
+  default = ""
+}
+variable "aifs_daily_model_dir" {
+  type    = string
+  default = ""
+}
+variable "fuxi_model_dir" {
+  type    = string
+  default = ""
+}
+variable "fuxi_s2s_model_dir" {
+  type    = string
+  default = ""
+}
+variable "gencast_model_dir" {
+  type    = string
+  default = ""
+}
+variable "graphcast_model_dir" {
+  type    = string
+  default = ""
+}
+variable "ifs_model_dir" {
+  type    = string
+  default = ""
+}
+variable "neuralgcm_model_dir" {
+  type    = string
+  default = ""
+}

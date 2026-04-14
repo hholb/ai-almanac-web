@@ -9,6 +9,7 @@ dependencies = [
     "gcsfs>=2026.3.0",
     "globus-sdk>=4.5.0",
     "google-cloud-batch>=0.21.0",
+    "google-cloud-run>=0.16.0",
     "google-cloud-storage>=3.10.1",
     "netcdf4>=1.7.4",
     "psycopg2-binary>=2.9.11",

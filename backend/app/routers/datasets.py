@@ -161,12 +161,6 @@ async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
 
     def _insert():
         with get_db() as conn:
-            conn.execute(
-                text("INSERT INTO datasets (id, user_id, name, status, storage_key, created_at, ready_at) "
-                     "VALUES (:id, :uid, :name, 'ready', :key, :now, :now)"),
-                {"id": dataset_id, "uid": user["id"], "name": body.name,
-                 "key": body.obs_dir, "now": now},
-            )
             return dict(conn.execute(
                 text("INSERT INTO datasets (id, user_id, name, status, storage_key, created_at, ready_at) "
                      "VALUES (:id, :uid, :name, 'ready', :key, :now, :now) RETURNING *"),

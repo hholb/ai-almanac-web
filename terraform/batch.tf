@@ -31,10 +31,10 @@ resource "google_storage_bucket_iam_member" "worker_writes_outputs" {
   member = "serviceAccount:${google_service_account.batch_worker.email}"
 }
 
-# Allow backend to submit and monitor Batch jobs
-resource "google_project_iam_member" "backend_batch_editor" {
+# Allow backend to create and run Cloud Run Jobs
+resource "google_project_iam_member" "backend_run_developer" {
   project = var.project_id
-  role    = "roles/batch.jobsEditor"
+  role    = "roles/run.developer"
   member  = "serviceAccount:${google_service_account.backend.email}"
 }
 

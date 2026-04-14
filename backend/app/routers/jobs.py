@@ -219,12 +219,6 @@ async def create_job(body: JobCreate, user: CurrentUser):
 
     def _insert():
         with get_db() as conn:
-            conn.execute(
-                text("INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at, started_at) "
-                     "VALUES (:id, :uid, :did, 'running', :cfg, :now, :now)"),
-                {"id": job_id, "uid": user["id"], "did": body.dataset_id,
-                 "cfg": json.dumps(config), "now": now},
-            )
             return dict(conn.execute(
                 text("INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at, started_at) "
                      "VALUES (:id, :uid, :did, 'running', :cfg, :now, :now) RETURNING *"),

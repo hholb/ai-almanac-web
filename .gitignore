@@ -6,6 +6,7 @@ terraform/.terraform.lock.hcl
 terraform/terraform.tfstate*
 
 .env
+scripts/backend-env.yaml
 *.db
 *.db-shm
 *.db-wal

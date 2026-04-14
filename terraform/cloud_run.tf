@@ -166,10 +166,63 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.frontend_url
       }
 
-      # ROMP image pulled from GHCR by Cloud Batch workers
       env {
         name  = "ROMP_IMAGE"
         value = local.romp_image
+      }
+
+      # Job runner and data config
+      env {
+        name  = "STORAGE_BACKEND"
+        value = "gcs"
+      }
+      env {
+        name  = "JOB_RUNNER"
+        value = var.job_runner
+      }
+      env {
+        name  = "GCP_PROJECT"
+        value = var.project_id
+      }
+      env {
+        name  = "GCP_REGION"
+        value = var.region
+      }
+      env {
+        name  = "DEMO_OBS_DATASETS"
+        value = var.demo_obs_datasets
+      }
+      env {
+        name  = "AIFS_MODEL_DIR"
+        value = var.aifs_model_dir
+      }
+      env {
+        name  = "AIFS_DAILY_MODEL_DIR"
+        value = var.aifs_daily_model_dir
+      }
+      env {
+        name  = "FUXI_MODEL_DIR"
+        value = var.fuxi_model_dir
+      }
+      env {
+        name  = "FUXI_S2S_MODEL_DIR"
+        value = var.fuxi_s2s_model_dir
+      }
+      env {
+        name  = "GENCAST_MODEL_DIR"
+        value = var.gencast_model_dir
+      }
+      env {
+        name  = "GRAPHCAST_MODEL_DIR"
+        value = var.graphcast_model_dir
+      }
+      env {
+        name  = "IFS_MODEL_DIR"
+        value = var.ifs_model_dir
+      }
+      env {
+        name  = "NEURALGCM_MODEL_DIR"
+        value = var.neuralgcm_model_dir
       }
     }
   }
