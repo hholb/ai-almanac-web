@@ -64,6 +64,58 @@
   let perModelOverrides = $state<Record<string, Record<string, string | boolean | number>>>({});
   let submitting = $state(false);
   let submitError = $state<string | null>(null);
+  let selectedEventType = $state<string | null>(null);
+
+  // ---- Event type catalog ----------------------------------------------------
+
+  type EventTypeStatus = "active" | "coming_soon";
+
+  const EVENT_TYPES: {
+    id: string;
+    name: string;
+    shortName: string;
+    description: string;
+    regions: string[];
+    status: EventTypeStatus;
+    onsetDefinition: string;
+  }[] = [
+    {
+      id: "monsoon_onset",
+      name: "Monsoon Onset",
+      shortName: "Monsoon",
+      description: "Evaluate model skill in predicting the calendar date of seasonal monsoon onset using region-specific meteorological definitions.",
+      regions: ["India", "Ethiopia"],
+      status: "active",
+      onsetDefinition: "India: Modified Moron–Robertson (MOK-anchored). Ethiopia: ICPAC 3-day accumulation threshold.",
+    },
+    {
+      id: "monsoon_cessation",
+      name: "Monsoon Cessation",
+      shortName: "Cessation",
+      description: "Evaluate model skill in predicting the end of the monsoon season using region-specific withdrawal definitions.",
+      regions: ["Coming soon"],
+      status: "coming_soon",
+      onsetDefinition: "",
+    },
+    {
+      id: "heatwave_onset",
+      name: "Heat Wave Onset",
+      shortName: "Heat Wave",
+      description: "Benchmark forecasts of heat wave onset defined by sustained anomalous temperature thresholds.",
+      regions: ["Coming soon"],
+      status: "coming_soon",
+      onsetDefinition: "",
+    },
+    {
+      id: "custom",
+      name: "Custom Event",
+      shortName: "Custom",
+      description: "Define your own human-centric event metric with AI assistance. Describe what matters to your community — crop planting windows, flood risk days, school closure thresholds — and we'll help you build a rigorous benchmark around it.",
+      regions: ["Coming soon"],
+      status: "coming_soon",
+      onsetDefinition: "",
+    },
+  ];
 
   // ---- Model reference catalog -----------------------------------------------
 
@@ -137,6 +189,7 @@
     submitError = null;
     try {
       const sharedParams: JobParams = {
+        event_type: selectedEventType ?? "monsoon_onset",
         region: form.region,
         start_date: form.startDate,
         end_date: form.endDate,
@@ -201,13 +254,13 @@
     <button
       class="new-run-btn"
       class:active={store.showForm}
-      onclick={() => { store.showForm = true; store.selectedGroupKey = null; }}
+      onclick={() => { store.showForm = true; store.selectedGroupKey = null; selectedEventType = null; }}
     >
-      + New Run Set
+      + New Benchmark
     </button>
 
     {#if store.runGroups.length > 0}
-      <p class="sidebar-title">Run Sets</p>
+      <p class="sidebar-title">Benchmarks</p>
       <ul class="group-list">
         {#each store.runGroups as group}
           <li class="group-list-item">
@@ -216,6 +269,7 @@
               class:selected={store.selectedGroupKey === group.key && !store.showForm}
               onclick={() => selectGroup(group.key)}
             >
+              <span class="group-event-type">{EVENT_TYPES.find(e => e.id === group.eventType)?.shortName ?? group.eventType}</span>
               <span class="group-region">{group.region}</span>
               {#if group.startDate && group.endDate}
                 <span class="group-dates">{group.startDate} – {group.endDate}</span>
@@ -247,11 +301,59 @@
   <!-- Main content -->
   <div class="main-content">
 
-    {#if store.showForm}
-      <!-- ---- New Run Set form ---- -->
+    {#if store.showForm && !selectedEventType}
+      <!-- ---- Event type picker ---- -->
       <header class="detail-header">
-        <p class="detail-eyebrow">Configure</p>
-        <h1 class="detail-title">New Run Set</h1>
+        <p class="detail-eyebrow">New Benchmark</p>
+        <h1 class="detail-title">Choose an Event Type</h1>
+        <p class="detail-subtitle">Select the type of weather event to benchmark. Each type uses its own onset definition and evaluation criteria.</p>
+      </header>
+      <hr class="divider" />
+
+      <div class="event-type-grid">
+        {#each EVENT_TYPES as et}
+          <button
+            type="button"
+            class="event-type-card"
+            class:coming-soon={et.status === "coming_soon"}
+            disabled={et.status === "coming_soon"}
+            onclick={() => { selectedEventType = et.id; }}
+          >
+            <div class="etc-top">
+              <span class="etc-name">{et.name}</span>
+              {#if et.status === "coming_soon"}
+                <span class="etc-soon-badge">Coming soon</span>
+              {:else}
+                <span class="etc-active-badge">Available</span>
+              {/if}
+            </div>
+            <p class="etc-desc">{et.description}</p>
+            {#if et.onsetDefinition}
+              <p class="etc-onset"><span class="etc-onset-label">Onset</span>{et.onsetDefinition}</p>
+            {/if}
+            <div class="etc-regions">
+              {#each et.regions as region}
+                <span class="etc-region-chip">{region}</span>
+              {/each}
+            </div>
+          </button>
+        {/each}
+      </div>
+
+    {:else if store.showForm && selectedEventType}
+      <!-- ---- New Benchmark form ---- -->
+      {@const eventTypeMeta = EVENT_TYPES.find(e => e.id === selectedEventType)}
+      <header class="detail-header">
+        <div class="detail-header-row">
+          <button class="back-btn" onclick={() => { selectedEventType = null; }} title="Back to event type selection">
+            ← Back
+          </button>
+          <div>
+            <p class="detail-eyebrow">Configure</p>
+            <h1 class="detail-title">New Benchmark</h1>
+            <p class="detail-event-type">{eventTypeMeta?.name ?? selectedEventType}</p>
+          </div>
+        </div>
       </header>
       <hr class="divider" />
 
@@ -391,7 +493,7 @@
                   {/if}
                 </div>
                 <div class="field-row">
-                  <label>Init Days
+                  <label><span class="label-text">Init Days <span class="tip" data-tip="Override initialization day offsets for this model. Leave unchanged to use the shared setting above.">ⓘ</span></span>
                     <input
                       value={getOverride(modelId, "init_days", cfg?.init_days ?? "")}
                       oninput={(e) => setOverride(modelId, "init_days", (e.target as HTMLInputElement).value)}
@@ -403,10 +505,10 @@
                       checked={getOverride(modelId, "probabilistic", cfg?.probabilistic ?? false)}
                       onchange={(e) => setOverride(modelId, "probabilistic", (e.target as HTMLInputElement).checked)}
                     />
-                    Probabilistic
+                    <span class="label-text">Probabilistic <span class="tip" data-tip="Treat this model as an ensemble and compute probabilistic metrics (Brier Score, RPS, AUC) in addition to deterministic ones.">ⓘ</span></span>
                   </label>
                   {#if getOverride(modelId, "probabilistic", cfg?.probabilistic ?? false)}
-                    <label>Members
+                    <label><span class="label-text">Members <span class="tip" data-tip="Number of ensemble members to use. Enter a count (e.g. '11', '51') or 'All' to include every available member.">ⓘ</span></span>
                       <input
                         value={getOverride(modelId, "members", cfg?.members ?? "")}
                         placeholder="e.g. 11 or All"
@@ -425,24 +527,40 @@
           <fieldset class="nested-fieldset">
             <legend>Observation Overrides</legend>
             <div class="field-row">
-              <label>obs <input bind:value={form.obs} /></label>
-              <label>obs_file_pattern <input bind:value={form.obsFilePattern} /></label>
-              <label>obs_var <input bind:value={form.obsVar} /></label>
+              <label><span class="label-text">Observations <span class="tip" data-tip="Override the path to the observation data directory. Leave blank to use the selected dataset's default location.">ⓘ</span></span>
+                <input bind:value={form.obs} />
+              </label>
+              <label><span class="label-text">File Pattern <span class="tip" data-tip="Override the filename pattern used to locate observation files, e.g. 'YYYY_MM.nc'. Leave blank to use the dataset default.">ⓘ</span></span>
+                <input bind:value={form.obsFilePattern} />
+              </label>
+              <label><span class="label-text">Variable <span class="tip" data-tip="Variable name to read from observation files (e.g. 'tp' for total precipitation). Leave blank to use the dataset default.">ⓘ</span></span>
+                <input bind:value={form.obsVar} />
+              </label>
             </div>
           </fieldset>
           <fieldset class="nested-fieldset">
             <legend>Wet / Dry Spell</legend>
             <div class="field-row">
-              <label>wet_threshold <input type="number" step="any" bind:value={form.wetThreshold} /></label>
-              <label>wet_spell <input type="number" bind:value={form.wetSpell} /></label>
-              <label>dry_spell <input type="number" bind:value={form.drySpell} /></label>
+              <label><span class="label-text">Wet Threshold <span class="tip" data-tip="Minimum daily rainfall (mm) to classify a day as wet. Default is 1 mm/day for both India and Ethiopia onset definitions.">ⓘ</span></span>
+                <input type="number" step="any" bind:value={form.wetThreshold} />
+              </label>
+              <label><span class="label-text">Wet Spell <span class="tip" data-tip="Required length (days) of consecutive wet days to qualify as an onset-triggering wet spell.">ⓘ</span></span>
+                <input type="number" bind:value={form.wetSpell} />
+              </label>
+              <label><span class="label-text">Dry Spell <span class="tip" data-tip="Maximum allowed dry spell length (days) following onset before it is invalidated. Used in the Moron–Robertson India definition.">ⓘ</span></span>
+                <input type="number" bind:value={form.drySpell} />
+              </label>
             </div>
           </fieldset>
           <fieldset class="nested-fieldset">
             <legend>Masks &amp; Thresholds</legend>
             <div class="field-row">
-              <label class="grow">nc_mask path <input bind:value={form.ncMask} /></label>
-              <label class="grow">thresh_file path <input bind:value={form.threshFile} /></label>
+              <label class="grow"><span class="label-text">Mask File <span class="tip" data-tip="Path to a NetCDF mask file. Grid points outside the mask are excluded from all metric calculations.">ⓘ</span></span>
+                <input bind:value={form.ncMask} />
+              </label>
+              <label class="grow"><span class="label-text">Threshold File <span class="tip" data-tip="Path to a precomputed threshold file. Overrides the climatology-derived wet-spell threshold used in onset detection.">ⓘ</span></span>
+                <input bind:value={form.threshFile} />
+              </label>
             </div>
           </fieldset>
         </details>
@@ -468,11 +586,11 @@
       </form>
 
     {:else if store.selectedGroup}
-      <!-- ---- Run Set Results ---- -->
+      <!-- ---- Benchmark Results ---- -->
       {@const group = store.selectedGroup}
       <header class="detail-header">
         <div>
-          <p class="detail-eyebrow">Run Set</p>
+          <p class="detail-eyebrow">Benchmark</p>
           <h1 class="detail-title">{group.region}</h1>
           {#if group.startDate && group.endDate}
             <p class="detail-dates">{group.startDate} – {group.endDate}</p>
@@ -529,7 +647,7 @@
     {:else}
       <div class="empty-state">
         <p class="empty-title">No run set selected</p>
-        <p class="muted">Click <strong>+ New Run Set</strong> in the sidebar to benchmark one or more models against ground-truth observations. Select a region, date range, and at least one model — results include spatial maps and per-grid-point skill metrics (MAE, FAR, MR) across forecast lead-time windows.</p>
+        <p class="muted">Click <strong>+ New Benchmark</strong> in the sidebar to benchmark one or more models against ground-truth observations. Select a region, date range, and at least one model — results include spatial maps and per-grid-point skill metrics (MAE, FAR, MR) across forecast lead-time windows.</p>
       </div>
     {/if}
 
@@ -578,7 +696,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     margin: 0.25rem 0 0 0.25rem;
   }
 
@@ -622,7 +740,7 @@
   .group-item.selected .group-region { color: var(--color-accent); }
 
   .group-region { font-size: 0.875rem; font-weight: 500; }
-  .group-dates { font-size: 0.65rem; color: var(--color-text-dim); font-family: var(--font-mono); }
+  .group-dates { font-size: 0.65rem; color: var(--color-text-muted); font-family: var(--font-mono); }
 
   .group-badges {
     display: flex;
@@ -635,7 +753,7 @@
   .badge-count {
     font-size: 0.6rem;
     font-weight: 600;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
   }
 
   .group-delete {
@@ -662,17 +780,17 @@
     padding: 0.1rem 0.4rem;
     border-radius: 0.2rem;
   }
-  .status-badge.running  { background: #fff3cd; color: #856404; }
-  .status-badge.complete { background: #d4edda; color: #155724; }
-  .status-badge.failed   { background: #f8d7da; color: #721c24; }
-  .status-badge.mixed    { background: var(--color-border-subtle); color: var(--color-text-dim); }
+  .status-badge.running  { background: var(--color-status-running-bg);  color: var(--color-status-running);  }
+  .status-badge.complete { background: var(--color-status-complete-bg); color: var(--color-status-complete); }
+  .status-badge.failed   { background: var(--color-status-failed-bg);   color: var(--color-status-failed);   }
+  .status-badge.mixed    { background: var(--color-border-subtle); color: var(--color-text-muted); }
 
   /* ---- Main content ---- */
   .main-content {
     flex: 1;
     min-width: 0;
     background: var(--color-surface-raised);
-    border: 1px solid var(--color-border-subtle);
+    border: 1px solid var(--color-border);
     border-radius: 0.6rem;
     padding: 2rem;
   }
@@ -683,15 +801,23 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: var(--color-text-dim);
+    color: var(--color-accent);
     margin: 0 0 0.2rem;
   }
   .detail-title {
-    font-size: 1.5rem;
-    font-weight: 700;
+    font-size: 1.75rem;
+    font-weight: 400;
+    font-family: var(--font-display);
     margin: 0;
     color: var(--color-text);
   }
+  .detail-event-type {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    margin: 0.2rem 0 0;
+  }
+
   .detail-dates {
     font-size: 0.8rem;
     color: var(--color-text-muted);
@@ -725,16 +851,16 @@
     border: 1px solid var(--color-border-subtle);
     background: var(--color-surface);
   }
-  .model-pill.running  { background: #fff3cd; border-color: #ffc107; color: #856404; }
-  .model-pill.failed   { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
-  .model-pill.complete { background: #d4edda; border-color: #c3e6cb; color: #155724; }
+  .model-pill.running  { background: var(--color-status-running-bg);  border-color: var(--color-status-running);  color: var(--color-status-running);  }
+  .model-pill.failed   { background: var(--color-status-failed-bg);   border-color: var(--color-status-failed);   color: var(--color-status-failed);   }
+  .model-pill.complete { background: var(--color-status-complete-bg); border-color: var(--color-status-complete); color: var(--color-status-complete); }
 
   .pill-name { letter-spacing: 0.05em; }
   .pill-icon { font-size: 0.7rem; }
   .pill-spinner {
     width: 0.6rem; height: 0.6rem;
-    border: 1.5px solid #ffc107;
-    border-top-color: #856404;
+    border: 1.5px solid rgba(251, 191, 36, 0.3);
+    border-top-color: var(--color-status-running);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
@@ -744,17 +870,17 @@
   .run-form { display: flex; flex-direction: column; gap: 1.25rem; }
 
   fieldset {
-    border: 1px solid var(--color-border-subtle);
+    border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     padding: 0.75rem 1rem 1rem;
     margin: 0;
   }
   legend {
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--color-text-dim);
+    letter-spacing: 0.1em;
+    color: var(--color-accent);
     padding: 0 0.35rem;
   }
 
@@ -769,25 +895,181 @@
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 500;
-    color: var(--color-text-muted);
+    color: var(--color-text);
   }
   label.grow { flex: 1; min-width: 140px; }
   label.checkbox-label { flex-direction: row; align-items: center; gap: 0.4rem; font-size: 0.8rem; padding-bottom: 0.15rem; }
 
   input[type="text"], input:not([type]), input[type="number"], input[type="date"], select {
-    padding: 0.35rem 0.55rem;
-    border: 1px solid var(--color-border-subtle);
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--color-border);
     border-radius: 0.3rem;
-    background: var(--color-surface);
+    background: var(--color-bg);
     color: var(--color-text);
     font-family: var(--font-body);
-    font-size: 0.8rem;
+    font-size: 0.82rem;
     outline: none;
-    transition: border-color 0.12s;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  input:focus, select:focus { border-color: var(--color-accent); }
+  input:focus, select:focus {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px var(--color-accent-light);
+  }
+
+  /* ---- Event type picker ---- */
+  .detail-subtitle {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+    margin: 0.35rem 0 0;
+    max-width: 52ch;
+    line-height: 1.5;
+  }
+
+  .detail-header-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .back-btn {
+    padding: 0.35rem 0.7rem;
+    background: none;
+    border: 1px solid var(--color-border);
+    border-radius: 0.3rem;
+    color: var(--color-text-muted);
+    font-family: var(--font-body);
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+    white-space: nowrap;
+    margin-top: 0.2rem;
+  }
+  .back-btn:hover { color: var(--color-accent); border-color: var(--color-accent); }
+
+  .event-type-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 1rem;
+  }
+
+  .event-type-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding: 1.25rem 1.25rem 1rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s, transform 0.1s;
+    font-family: var(--font-body);
+  }
+  .event-type-card:not(.coming-soon):hover {
+    border-color: var(--color-accent);
+    background: var(--color-surface-raised);
+    box-shadow: 0 0 0 3px var(--color-accent-glow), 0 4px 16px rgba(0,0,0,0.2);
+    transform: translateY(-2px);
+  }
+  .event-type-card.coming-soon {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .etc-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .etc-name {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: var(--color-text);
+  }
+  .etc-soon-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    padding: 0.15rem 0.45rem;
+    border-radius: 0.25rem;
+    background: var(--color-border-subtle);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .etc-active-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    padding: 0.15rem 0.45rem;
+    border-radius: 0.25rem;
+    background: var(--color-status-complete-bg);
+    color: var(--color-status-complete);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .etc-desc {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    line-height: 1.5;
+    flex: 1;
+  }
+  .etc-onset {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+    line-height: 1.4;
+    padding: 0.4rem 0.6rem;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.3rem;
+  }
+  .etc-onset-label {
+    font-weight: 700;
+    color: var(--color-accent);
+    margin-right: 0.4rem;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
+  .etc-regions {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    margin-top: auto;
+  }
+  .etc-region-chip {
+    font-size: 0.68rem;
+    font-weight: 500;
+    padding: 0.15rem 0.5rem;
+    border-radius: 1rem;
+    background: var(--color-accent-light);
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent-border);
+  }
+  .coming-soon .etc-region-chip {
+    background: var(--color-border-subtle);
+    color: var(--color-text-dim);
+    border-color: transparent;
+  }
+
+  /* ---- Sidebar event type label ---- */
+  .group-event-type {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-accent);
+    margin-bottom: 0.05rem;
+  }
 
   /* Model chip grid */
   .model-chip-grid {
@@ -802,17 +1084,17 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 0.1rem;
-    padding: 0.4rem 0.85rem;
-    border: 1.5px solid var(--color-border-subtle);
+    padding: 0.45rem 0.9rem;
+    border: 1px solid var(--color-border);
     border-radius: 0.35rem;
     background: var(--color-surface);
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     font-family: var(--font-body);
     cursor: pointer;
-    transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+    transition: background-color 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s;
     text-align: left;
   }
-  .model-chip:hover { border-color: var(--color-accent); color: var(--color-accent); }
+  .model-chip:hover { border-color: var(--color-accent); color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-glow); }
   .model-chip.active {
     background: var(--color-accent-light);
     border-color: var(--color-accent);
@@ -829,7 +1111,7 @@
     margin-top: 0.75rem;
     border: 1px solid var(--color-border-subtle);
     border-radius: 0.35rem;
-    overflow: hidden;
+    overflow: visible;
   }
   .model-reference > summary {
     padding: 0.45rem 0.75rem;
@@ -840,10 +1122,14 @@
     list-style: none;
     user-select: none;
     background: var(--color-surface);
+    border-radius: 0.35rem;
     transition: background-color 0.12s;
   }
   .model-reference > summary::-webkit-details-marker { display: none; }
-  .model-reference[open] > summary { border-bottom: 1px solid var(--color-border-subtle); }
+  .model-reference[open] > summary {
+    border-bottom: 1px solid var(--color-border-subtle);
+    border-radius: 0.35rem 0.35rem 0 0;
+  }
   .model-reference > summary:hover { background: var(--color-accent-glow); }
 
   .model-ref-body {
@@ -880,8 +1166,8 @@
     padding: 0.1rem 0.35rem;
     border-radius: 0.2rem;
   }
-  .ref-badge-nwp  { background: #dbeafe; color: #1e40af; }
-  .ref-badge-aiwp { background: #dcfce7; color: #166534; }
+  .ref-badge-nwp  { background: rgba(59, 130, 246, 0.15); color: #93c5fd; }
+  .ref-badge-aiwp { background: rgba(52, 211, 153, 0.15); color: var(--color-status-complete); }
   .ref-forecast {
     font-size: 0.7rem;
     color: var(--color-text-muted);
@@ -889,16 +1175,16 @@
   .ref-res, .ref-period {
     font-size: 0.68rem;
     font-family: var(--font-mono);
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     padding: 0.05rem 0.35rem;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-subtle);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
     border-radius: 0.2rem;
   }
   .ref-desc {
     margin: 0;
     font-size: 0.72rem;
-    color: var(--color-text-dim);
+    color: var(--color-text-muted);
     line-height: 1.4;
   }
 
@@ -919,8 +1205,8 @@
     font-size: 0.58rem;
     font-style: normal;
     font-weight: 600;
-    color: var(--color-text-dim);
-    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
     border-radius: 50%;
     cursor: help;
     line-height: 1;
@@ -952,7 +1238,7 @@
     pointer-events: none;
     opacity: 0;
     transition: opacity 0.15s;
-    z-index: 200;
+    z-index: 1000;
     text-align: left;
   }
   .tip:hover::after {
@@ -1020,7 +1306,7 @@
   .param-section {
     border: 1px solid var(--color-border-subtle);
     border-radius: 0.4rem;
-    overflow: hidden;
+    overflow: visible;
   }
   .param-section > summary {
     padding: 0.6rem 0.9rem;
@@ -1031,10 +1317,14 @@
     list-style: none;
     user-select: none;
     background: var(--color-surface);
+    border-radius: 0.4rem;
     transition: background-color 0.12s;
   }
   .param-section > summary::-webkit-details-marker { display: none; }
-  .param-section[open] > summary { border-bottom: 1px solid var(--color-border-subtle); }
+  .param-section[open] > summary {
+    border-bottom: 1px solid var(--color-border-subtle);
+    border-radius: 0.4rem 0.4rem 0 0;
+  }
   .param-section > summary:hover { background: var(--color-accent-glow); }
 
   .nested-fieldset {
@@ -1097,24 +1387,24 @@
 
   .failed-runs { display: flex; flex-direction: column; gap: 1.25rem; }
   .job-error {
-    border: 1px solid #5a2020;
+    border: 1px solid var(--color-danger-border);
     border-radius: 6px;
     padding: 0.75rem 1rem;
-    background: #1f1010;
+    background: var(--color-danger-bg);
   }
   .job-error-title {
     margin: 0 0 0.35rem;
     font-size: 0.75rem;
     font-weight: 700;
     letter-spacing: 0.06em;
-    color: #e07070;
+    color: var(--color-danger);
   }
   .job-error-msg {
     margin: 0 0 0.5rem;
     font-size: 0.78rem;
-    color: #cc8888;
+    color: var(--color-text-muted);
     white-space: pre-wrap;
     word-break: break-word;
-    font-family: "JetBrains Mono", "Fira Mono", monospace;
+    font-family: var(--font-mono);
   }
 </style>

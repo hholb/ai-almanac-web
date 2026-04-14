@@ -143,6 +143,7 @@ export type JobParams = {
   region?: string;
   start_date?: string;
   end_date?: string;
+  event_type?: string;
   // Common
   start_year_clim?: number;
   end_year_clim?: number;

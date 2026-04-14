@@ -35,7 +35,8 @@ export async function getCachedJobGrid(
 export type { Job };
 
 export type RunGroup = {
-  key: string;           // `${region}||${start_date}||${end_date}`
+  key: string;           // `${eventType}||${region}||${start_date}||${end_date}`
+  eventType: string;
   region: string;
   startDate: string;
   endDate: string;
@@ -53,10 +54,11 @@ export type MultiRunFormData = {
 function buildRunGroups(jobs: Job[]): RunGroup[] {
   const map = new globalThis.Map<string, Job[]>();
   for (const job of jobs) {
-    const region = job.params?.region ?? "unknown";
-    const start  = job.params?.start_date ?? "unknown";
-    const end    = job.params?.end_date   ?? "unknown";
-    const key    = `${region}||${start}||${end}`;
+    const eventType = job.params?.event_type ?? "monsoon_onset";
+    const region    = job.params?.region     ?? "unknown";
+    const start     = job.params?.start_date ?? "unknown";
+    const end       = job.params?.end_date   ?? "unknown";
+    const key       = `${eventType}||${region}||${start}||${end}`;
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(job);
   }
@@ -69,6 +71,7 @@ function buildRunGroups(jobs: Job[]): RunGroup[] {
       const first = groupJobs[0];
       return {
         key,
+        eventType: first.params?.event_type ?? "monsoon_onset",
         region:    first.params?.region     ?? "Unknown",
         startDate: first.params?.start_date ?? "",
         endDate:   first.params?.end_date   ?? "",
@@ -156,7 +159,7 @@ export class BenchmarkStore {
     );
     this.jobs = [...results, ...untrack(() => this.jobs)];
     const first = results[0];
-    const key = `${first.params?.region ?? "unknown"}||${first.params?.start_date ?? "unknown"}||${first.params?.end_date ?? "unknown"}`;
+    const key = `${first.params?.event_type ?? "monsoon_onset"}||${first.params?.region ?? "unknown"}||${first.params?.start_date ?? "unknown"}||${first.params?.end_date ?? "unknown"}`;
     this.selectedGroupKey = key;
     this.showForm = false;
   }
