@@ -242,7 +242,7 @@ class CloudRunJobRunner(JobRunner):
             entries = client.list_entries(
                 filter_=(
                     f'resource.type="cloud_run_job" '
-                    f'AND labels."run.googleapis.com/execution_name"="{execution_id}"'
+                    f'AND labels."run.googleapis.com/execution_name"=~"{execution_id}"'
                 ),
                 order_by=gcloud_logging.DESCENDING,
                 page_size=30,

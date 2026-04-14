@@ -24,10 +24,11 @@ def _fetch_cloud_logs(job_id: str, max_entries: int = 200) -> str:
     try:
         from google.cloud import logging as gcloud_logging
         client = gcloud_logging.Client()
+        job_prefix = job_id.replace("_", "-")[:36]
         entries = client.list_entries(
             filter_=(
                 f'resource.type="cloud_run_job" '
-                f'AND labels."run.googleapis.com/job_name"=~"romp-{job_id[:8]}"'
+                f'AND labels."run.googleapis.com/execution_name"=~"romp-{job_prefix}"'
             ),
             order_by=gcloud_logging.ASCENDING,
             page_size=max_entries,
