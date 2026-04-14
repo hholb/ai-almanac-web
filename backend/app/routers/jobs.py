@@ -390,8 +390,14 @@ async def get_metrics(
         grid_info: GridInfo | None = None
         actual_bbox: dict | None = None
 
+        def _open_nc(path):
+            if storage.is_local:
+                return xr.open_dataset(path)
+            with fs.open(path.removeprefix("gs://"), "rb") as f:
+                return xr.load_dataset(f)
+
         for nc_file in nc_files:
-            ds = xr.open_dataset(nc_file)
+            ds = _open_nc(nc_file)
 
             if grid_info is None and "lat" in ds.coords and "lon" in ds.coords:
                 grid_info = GridInfo(
@@ -502,7 +508,11 @@ async def get_grid(
         if not matches:
             raise HTTPException(status_code=404, detail=f"Grid file for {model}/{window} not found")
 
-        ds = xr.open_dataset(matches[0])
+        if storage.is_local:
+            ds = xr.open_dataset(matches[0])
+        else:
+            with fs.open(matches[0].removeprefix("gs://"), "rb") as f:
+                ds = xr.load_dataset(f)
         if metric not in ds.data_vars:
             ds.close()
             raise HTTPException(status_code=404, detail=f"Metric {metric!r} not found in grid")
