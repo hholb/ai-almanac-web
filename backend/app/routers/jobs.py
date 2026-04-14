@@ -394,7 +394,7 @@ async def get_metrics(
             if storage.is_local:
                 return xr.open_dataset(path)
             with fs.open(path.removeprefix("gs://"), "rb") as f:
-                return xr.load_dataset(f)
+                return xr.load_dataset(f, engine="h5netcdf")
 
         for nc_file in nc_files:
             ds = _open_nc(nc_file)
@@ -512,7 +512,7 @@ async def get_grid(
             ds = xr.open_dataset(matches[0])
         else:
             with fs.open(matches[0].removeprefix("gs://"), "rb") as f:
-                ds = xr.load_dataset(f)
+                ds = xr.load_dataset(f, engine="h5netcdf")
         if metric not in ds.data_vars:
             ds.close()
             raise HTTPException(status_code=404, detail=f"Metric {metric!r} not found in grid")
