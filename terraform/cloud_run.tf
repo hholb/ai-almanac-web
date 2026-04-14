@@ -1,13 +1,14 @@
 resource "google_cloud_run_v2_service" "frontend" {
-  name     = "almanac-frontend"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_ALL"
+  name                = "almanac-frontend"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
 
   template {
     service_account = google_service_account.frontend.email
 
     containers {
-      image = var.frontend_image
+      image = local.frontend_image
 
       ports {
         container_port = 3000
@@ -66,11 +67,12 @@ resource "google_cloud_run_domain_mapping" "backend" {
 }
 
 resource "google_cloud_run_v2_service" "backend" {
-  name     = "almanac-backend"
-  location = var.region
+  name                = "almanac-backend"
+  location            = var.region
   # Frontend calls the backend directly from the browser (CORS), so it must be public.
   # App-level auth (Globus token validation) protects all non-health endpoints.
-  ingress  = "INGRESS_TRAFFIC_ALL"
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
 
   template {
     service_account = google_service_account.backend.email
@@ -84,7 +86,7 @@ resource "google_cloud_run_v2_service" "backend" {
     }
 
     containers {
-      image = var.backend_image
+      image = local.backend_image
 
       resources {
         limits = {
@@ -167,7 +169,7 @@ resource "google_cloud_run_v2_service" "backend" {
       # ROMP image pulled from GHCR by Cloud Batch workers
       env {
         name  = "ROMP_IMAGE"
-        value = var.romp_image
+        value = local.romp_image
       }
     }
   }
@@ -186,4 +188,14 @@ resource "google_cloud_run_v2_service_iam_member" "backend_public" {
   name     = google_cloud_run_v2_service.backend.name
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+output "backend_url" {
+  value       = google_cloud_run_v2_service.backend.uri
+  description = "Backend Cloud Run URL — use as VITE_API_URL when building the frontend"
+}
+
+output "frontend_url_output" {
+  value       = google_cloud_run_v2_service.frontend.uri
+  description = "Frontend Cloud Run URL — set as var.frontend_url to lock down CORS"
 }

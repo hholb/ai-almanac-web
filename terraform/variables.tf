@@ -9,19 +9,29 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "ghcr_owner" {
+  description = "GitHub user/org that owns the GHCR packages (e.g. hholb)"
+  type        = string
+}
+
+# Derived image paths — resolved at plan time via locals in artifact_registry.tf
+# Override these only if you push images to a different registry.
 variable "frontend_image" {
   description = "Container image for the SvelteKit frontend"
   type        = string
+  default     = ""
 }
 
 variable "backend_image" {
   description = "Container image for the FastAPI backend"
   type        = string
+  default     = ""
 }
 
 variable "romp_image" {
-  description = "ROMP worker image pulled from GHCR by Cloud Batch jobs (e.g. ghcr.io/org/romp:latest)"
+  description = "ROMP worker image (used directly by Cloud Batch, not Cloud Run)"
   type        = string
+  default     = ""
 }
 
 variable "db_tier" {

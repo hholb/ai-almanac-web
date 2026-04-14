@@ -5,7 +5,10 @@
     <span class="block w-16 h-px bg-gradient-to-r from-transparent via-[var(--color-border)] to-transparent"></span>
   </div>
   <div class="max-w-[1160px] mx-auto flex justify-between items-center text-[0.75rem] text-[var(--color-text-dim)] tracking-[0.02em]">
-    <span class="brand-text">AI Almanac</span>
+    <div class="flex justify-around items-center">
+      <span class="brand-text">AI Almanac</span>
+      <span class="m-4">Note: this site is in active development, expect bugs.</span>
+    </div>
     <span>&copy; {new Date().getFullYear()} &mdash; University of Chicago</span>
   </div>
 </footer>

@@ -38,6 +38,8 @@ jobs:
           push: true
           build-args: |
             VITE_API_URL=${{ vars.VITE_API_URL }}
+            VITE_GLOBUS_CLIENT_ID=${{ vars.VITE_GLOBUS_CLIENT_ID }}
+            VITE_GLOBUS_REDIRECT_URL=${{ vars.VITE_GLOBUS_REDIRECT_URL }}
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}

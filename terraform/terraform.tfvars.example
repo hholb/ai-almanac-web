@@ -1,9 +1,11 @@
-project_id     = "your-gcp-project-id"
-region         = "us-central1"
+project_id  = "your-gcp-project-id"
+region      = "us-central1"
+ghcr_owner  = "your-github-username-or-org"
 
-frontend_image = "ghcr.io/your-org/almanac-frontend:latest"
-backend_image  = "ghcr.io/your-org/almanac-backend:latest"
-romp_image     = "ghcr.io/your-org/romp:latest"
+# Image overrides — leave unset to use the AR proxy paths derived from ghcr_owner.
+# frontend_image = "..."
+# backend_image  = "..."
+# romp_image     = "ghcr.io/your-org/romp:latest"  # Cloud Batch pulls this directly
 
 # Cloud SQL
 db_tier     = "db-f1-micro"   # upgrade to db-g1-small for production load
