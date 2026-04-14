@@ -233,6 +233,32 @@ class CloudRunJobRunner(JobRunner):
             except Exception:
                 pass
 
+    def _fetch_execution_error(self, execution_name: str) -> str:
+        try:
+            from google.cloud import logging as gcloud_logging
+            client = gcloud_logging.Client()
+            # execution_name is like projects/P/locations/R/jobs/J/executions/E
+            execution_id = execution_name.split("/")[-1]
+            entries = client.list_entries(
+                filter_=f'resource.type="cloud_run_job" AND labels."run.googleapis.com/execution_name"="{execution_id}" AND severity>=ERROR',
+                order_by=gcloud_logging.DESCENDING,
+                page_size=20,
+            )
+            lines = []
+            for entry in entries:
+                payload = entry.payload
+                if isinstance(payload, str):
+                    lines.append(payload.strip())
+                elif isinstance(payload, dict):
+                    lines.append(str(payload.get("message", payload)).strip())
+                if len(lines) >= 10:
+                    break
+            if lines:
+                return "\n".join(reversed(lines))
+        except Exception as exc:
+            logger.warning("Could not fetch execution logs for %s: %s", execution_name, exc)
+        return "Cloud Run Job task failed — check Cloud Logging"
+
     def _poll(self, job_id: str, execution_name: str) -> None:
         import time
         from google.cloud import run_v2
@@ -247,7 +273,8 @@ class CloudRunJobRunner(JobRunner):
                     logger.info("Execution %s succeeded", execution_name)
                     return
                 if ex.failed_count > 0:
-                    _update_status(job_id, "failed", error="Cloud Run Job task failed — check Cloud Logging")
+                    error_msg = _fetch_execution_error(execution_name)
+                    _update_status(job_id, "failed", error=error_msg)
                     logger.error("Execution %s failed", execution_name)
                     return
             except Exception as exc:

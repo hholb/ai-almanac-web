@@ -31,6 +31,13 @@ resource "google_storage_bucket_iam_member" "worker_writes_outputs" {
   member = "serviceAccount:${google_service_account.batch_worker.email}"
 }
 
+# Allow backend to read Cloud Logging (for fetching job failure details)
+resource "google_project_iam_member" "backend_logging_viewer" {
+  project = var.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.backend.email}"
+}
+
 # Allow backend to create and run Cloud Run Jobs
 resource "google_project_iam_member" "backend_run_developer" {
   project = var.project_id
@@ -50,6 +57,19 @@ resource "google_project_iam_member" "ci_run_developer" {
   project = var.project_id
   role    = "roles/run.developer"
   member  = "serviceAccount:${google_service_account.ci.email}"
+}
+
+# CI needs to act as the service accounts it deploys
+resource "google_service_account_iam_member" "ci_acts_as_frontend" {
+  service_account_id = google_service_account.frontend.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.ci.email}"
+}
+
+resource "google_service_account_iam_member" "ci_acts_as_backend" {
+  service_account_id = google_service_account.backend.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.ci.email}"
 }
 
 output "batch_worker_service_account" {

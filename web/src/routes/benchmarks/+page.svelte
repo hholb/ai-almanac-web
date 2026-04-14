@@ -425,17 +425,18 @@
       <hr class="divider" />
 
       {@const completeJobs = group.jobs.filter((j) => j.status === "complete")}
+      {@const failedJobs = group.jobs.filter((j) => j.status === "failed")}
 
-      {#if completeJobs.length > 0}
-        <ResultsViewer jobs={completeJobs} />
-      {:else if group.jobs.some((j) => j.status === "running")}
+      {#if group.jobs.some((j) => j.status === "running") && completeJobs.length === 0}
         <div class="running-state">
           <div class="spinner"></div>
           <p>Running benchmarks… checking every 3 s</p>
         </div>
-      {:else}
+      {/if}
+
+      {#if failedJobs.length > 0}
         <div class="failed-runs">
-          {#each group.jobs.filter((j) => j.status === "failed") as job}
+          {#each failedJobs as job}
             <div class="job-error">
               <p class="job-error-title">{job.model_name.toUpperCase()} failed</p>
               {#if job.error}
@@ -445,6 +446,10 @@
             </div>
           {/each}
         </div>
+      {/if}
+
+      {#if completeJobs.length > 0}
+        <ResultsViewer jobs={completeJobs} />
       {/if}
 
     {:else}
