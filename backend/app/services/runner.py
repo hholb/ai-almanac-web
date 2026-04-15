@@ -137,8 +137,9 @@ class CloudRunJobRunner(JobRunner):
         worker_sa: str,
         outputs_bucket: str,
         job_cpu: str = "4",
-        job_memory: str = "32Gi",
-        job_ephemeral_storage: str = "2Gi",
+        job_memory: str = "16Gi",
+        job_cpu_probabilistic: str = "8",
+        job_memory_probabilistic: str = "32Gi",
     ):
         self._image = romp_image
         self._timeout = job_timeout_seconds
@@ -148,7 +149,8 @@ class CloudRunJobRunner(JobRunner):
         self._outputs_bucket = outputs_bucket
         self._job_cpu = job_cpu
         self._job_memory = job_memory
-        self._job_ephemeral_storage = job_ephemeral_storage
+        self._job_cpu_prob = job_cpu_probabilistic
+        self._job_memory_prob = job_memory_probabilistic
 
     def run_job(self, job_id: str, config: dict) -> None:
         t = threading.Thread(target=self._submit, args=(job_id, config), daemon=True)
@@ -159,6 +161,9 @@ class CloudRunJobRunner(JobRunner):
         from google.protobuf import duration_pb2
 
         romp_params = config.get("romp_params", {})
+        probabilistic = str(romp_params.get("probabilistic", "false")).lower() == "true"
+        cpu     = self._job_cpu_prob     if probabilistic else self._job_cpu
+        memory  = self._job_memory_prob  if probabilistic else self._job_memory
 
         # Build GCS volumes and derive container-local paths from gs:// URIs.
         # One volume per unique bucket, mounted at /mnt/{bucket-name}.
@@ -202,10 +207,7 @@ class CloudRunJobRunner(JobRunner):
                         env=env_vars,
                         volume_mounts=volume_mounts,
                         resources=run_v2.ResourceRequirements(
-                            limits={
-                                "cpu": self._job_cpu,
-                                "memory": self._job_memory,
-                            },
+                            limits={"cpu": cpu, "memory": memory},
                         ),
                     )],
                     volumes=volumes,
@@ -350,7 +352,8 @@ def _make_runner() -> JobRunner:
             outputs_bucket=settings.gcs_outputs_bucket,
             job_cpu=settings.job_cpu,
             job_memory=settings.job_memory,
-            job_ephemeral_storage=settings.job_ephemeral_storage,
+            job_cpu_probabilistic=settings.job_cpu_probabilistic,
+            job_memory_probabilistic=settings.job_memory_probabilistic,
         )
     # Default: docker
     return DockerRunner(

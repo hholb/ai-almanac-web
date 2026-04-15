@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     romp_wrapper_image: str = ""  # if set, used instead of romp_image for Cloud Run jobs
     job_timeout_seconds: int = 3600
     job_cpu: str = "4"
-    job_memory: str = "32Gi"
-    job_ephemeral_storage: str = "2Gi"
+    job_memory: str = "16Gi"
+    # Probabilistic models load all ensemble members simultaneously and need
+    # more resources. CPU and memory must be scaled together on Cloud Run.
+    job_cpu_probabilistic: str = "8"
+    job_memory_probabilistic: str = "32Gi"
 
     # Cloud Batch settings — required when job_runner=batch
     gcp_project: str = ""
