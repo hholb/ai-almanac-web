@@ -13,8 +13,8 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.pool import NullPool
 
 from .config import settings
 
@@ -23,11 +23,16 @@ def _make_engine():
     from sqlalchemy.engine import make_url
     url = make_url(settings.database_url)
     if url.get_dialect().name == "sqlite":
-        return create_engine(
+        engine = create_engine(
             url,
             connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
+            poolclass=NullPool,
         )
+        # WAL mode allows concurrent reads and serialises writes without blocking.
+        @event.listens_for(engine, "connect")
+        def _set_wal(dbapi_conn, _):
+            dbapi_conn.execute("PRAGMA journal_mode=WAL")
+        return engine
     # PostgreSQL: inject DB_PASSWORD from Secret Manager if not already in URL.
     # Cloud Run injects it as a separate env var because Terraform can't easily
     # interpolate a secret value into another env var's string.
@@ -78,12 +83,18 @@ def init_db() -> None:
                 dataset_id   TEXT NOT NULL,
                 status       TEXT NOT NULL DEFAULT 'queued',
                 config_json  TEXT,
+                run_id       TEXT,
                 created_at   TEXT NOT NULL,
                 started_at   TEXT,
                 completed_at TEXT,
                 error        TEXT
             )
         """))
+        # Add run_id to existing deployments that predate this column.
+        try:
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN run_id TEXT"))
+        except Exception:
+            pass  # column already exists
         # Drop the FK constraint on dataset_id if it exists from an earlier schema.
         # Demo datasets are config-driven and never stored in the datasets table,
         # so the constraint causes an IntegrityError on PostgreSQL for every demo job.
@@ -104,8 +115,10 @@ def get_or_create_user(conn, external_id: str, email: str | None = None) -> dict
     if row:
         return dict(row)
     user_id = str(uuid.uuid4())
-    row = conn.execute(
+    result = conn.execute(
         text("INSERT INTO users (id, external_id, email, created_at) VALUES (:id, :eid, :email, :now) RETURNING *"),
         {"id": user_id, "eid": external_id, "email": email, "now": datetime.now(timezone.utc).isoformat()},
-    ).mappings().fetchone()
-    return dict(row)
+    )
+    row = dict(result.mappings().fetchone())
+    result.close()
+    return row

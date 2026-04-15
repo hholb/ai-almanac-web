@@ -70,8 +70,8 @@ class StorageBackend(ABC):
 
 class LocalStorage(StorageBackend):
     def __init__(self, upload_dir: str, job_outputs_dir: str):
-        self._upload_dir = Path(upload_dir)
-        self._outputs_dir = Path(job_outputs_dir)
+        self._upload_dir = Path(upload_dir).resolve()
+        self._outputs_dir = Path(job_outputs_dir).resolve()
 
     def generate_upload_url(self, storage_key: str, base_url: str) -> str:
         return base_url.rstrip("/") + f"/upload/{storage_key}"
