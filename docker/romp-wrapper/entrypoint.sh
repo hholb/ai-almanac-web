@@ -11,23 +11,10 @@ LOCAL=/tmp/romp_stage
 START_YEAR="${ROMP_START_DATE:0:4}"
 END_YEAR="${ROMP_END_DATE:0:4}"
 
-# Force GCSFuse to hydrate directory metadata for both data directories
-# before we start issuing individual stat/copy calls.
-ls "${ROMP_OBS_DIR}/" > /dev/null 2>&1 || true
-ls "${ROMP_MODEL_DIR}/" > /dev/null 2>&1 || true
-
-echo "==> Staging obs data (${START_YEAR}–${END_YEAR}) from ${ROMP_OBS_DIR} ..."
+echo "==> Staging obs data from ${ROMP_OBS_DIR} ..."
 LOCAL_OBS="${LOCAL}/obs"
 mkdir -p "$LOCAL_OBS"
-OBS_PATTERN="${ROMP_OBS_FILE_PATTERN:-{}.nc}"
-for year in $(seq "$START_YEAR" "$END_YEAR"); do
-    # Replace {} placeholder with the year; use sed to avoid bash glob-escape issues.
-    filename=$(echo "$OBS_PATTERN" | sed "s/{}/$year/g")
-    src="${ROMP_OBS_DIR}/${filename}"
-    if [[ -f "$src" ]]; then
-        cp "$src" "${LOCAL_OBS}/${filename}"
-    fi
-done
+cp -r "${ROMP_OBS_DIR}/." "$LOCAL_OBS/"
 export ROMP_OBS_DIR="$LOCAL_OBS"
 echo "    obs staged: $(ls "$LOCAL_OBS" | wc -l) files"
 
