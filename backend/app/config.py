@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     job_runner: str = "docker"
     romp_image: str = "romp:latest"
     job_timeout_seconds: int = 3600
+    job_cpu: str = "4"
+    job_memory: str = "32Gi"
 
     # Cloud Batch settings — required when job_runner=batch
     gcp_project: str = ""

@@ -136,6 +136,8 @@ class CloudRunJobRunner(JobRunner):
         region: str,
         worker_sa: str,
         outputs_bucket: str,
+        job_cpu: str = "4",
+        job_memory: str = "32Gi",
     ):
         self._image = romp_image
         self._timeout = job_timeout_seconds
@@ -143,6 +145,8 @@ class CloudRunJobRunner(JobRunner):
         self._region = region
         self._worker_sa = worker_sa
         self._outputs_bucket = outputs_bucket
+        self._job_cpu = job_cpu
+        self._job_memory = job_memory
 
     def run_job(self, job_id: str, config: dict) -> None:
         t = threading.Thread(target=self._submit, args=(job_id, config), daemon=True)
@@ -196,7 +200,7 @@ class CloudRunJobRunner(JobRunner):
                         env=env_vars,
                         volume_mounts=volume_mounts,
                         resources=run_v2.ResourceRequirements(
-                            limits={"cpu": "4", "memory": "8Gi"},
+                            limits={"cpu": self._job_cpu, "memory": self._job_memory},
                         ),
                     )],
                     volumes=volumes,
@@ -338,6 +342,8 @@ def _make_runner() -> JobRunner:
             region=settings.gcp_region,
             worker_sa=settings.batch_worker_sa,
             outputs_bucket=settings.gcs_outputs_bucket,
+            job_cpu=settings.job_cpu,
+            job_memory=settings.job_memory,
         )
     # Default: docker
     return DockerRunner(
