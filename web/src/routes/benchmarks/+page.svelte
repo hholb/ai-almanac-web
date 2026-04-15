@@ -25,11 +25,6 @@
     if (fetchedRegions.status === "fulfilled") regions = fetchedRegions.value;
     if (fetchedDatasets.status === "fulfilled") {
       datasets = fetchedDatasets.value;
-      const first = datasets[0];
-      if (first) {
-        form.datasetId = first.id;
-        form.obsFilePattern = first.obs_file_pattern ?? "";
-      }
     }
     dataLoaded = true;
   });
@@ -37,7 +32,18 @@
   // Reload models whenever the selected region changes.
   $effect(() => {
     if (!$isAuthenticated || !selectedRegion) return;
-    getModels(selectedRegion.id).then((m) => { if (m.length > 0) models = m; });
+    const regionId = selectedRegion.id;
+    getModels(regionId).then((m) => {
+      if (m.length > 0) models = m;
+      // Default to first demo dataset for this region.
+      const firstRegionDataset = datasets.find(
+        (d) => d.is_demo && d.name.toLowerCase().includes(selectedRegion!.display_name.toLowerCase())
+      );
+      if (firstRegionDataset) {
+        form.datasetId = firstRegionDataset.id;
+        form.obsFilePattern = firstRegionDataset.obs_file_pattern ?? "";
+      }
+    });
   });
 
   onDestroy(() => store.stopPolling());
@@ -445,7 +451,7 @@
                 {#if datasets.length === 0}
                   <option value="">{dataLoaded ? "No datasets available" : "Loading…"}</option>
                 {:else}
-                  {@const demoDatasets = datasets.filter((d) => d.is_demo)}
+                  {@const demoDatasets = datasets.filter((d) => d.is_demo && (!selectedRegion || d.name.toLowerCase().includes(selectedRegion.display_name.toLowerCase())))}
                   {@const userDatasets = datasets.filter((d) => !d.is_demo)}
                   {#if demoDatasets.length > 0}
                     <optgroup label="Demo Data">
