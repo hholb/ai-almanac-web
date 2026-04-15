@@ -229,8 +229,15 @@ async def create_job(body: JobCreate, user: CurrentUser):
         if ds["status"] != "ready":
             raise HTTPException(status_code=409, detail=f"Dataset is not ready (status: {ds['status']})")
 
-    registry = {m["id"]: m for m in get_model_registry()}
-    model_cfg = registry.get(body.model_name)
+    region = (body.params.region or "").lower()
+    registry = get_model_registry()
+    model_cfg = next(
+        (m for m in registry if m["id"] == body.model_name and m.get("region", "").lower() == region),
+        None,
+    ) or next(
+        (m for m in registry if m["id"] == body.model_name),
+        None,
+    )
     if not model_cfg:
         raise HTTPException(status_code=400, detail=f"Unknown model: {body.model_name!r}")
 
