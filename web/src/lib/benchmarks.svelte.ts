@@ -42,6 +42,7 @@ export type RunGroup = {
   endDate: string;
   jobs: Job[];
   mostRecentAt: string;  // for sort order
+  isOwner: boolean;      // true if the current user owns all jobs in this group
 };
 
 export type MultiRunFormData = {
@@ -58,7 +59,9 @@ function buildRunGroups(jobs: Job[]): RunGroup[] {
     const region    = job.params?.region     ?? "unknown";
     const start     = job.params?.start_date ?? "unknown";
     const end       = job.params?.end_date   ?? "unknown";
-    const key       = `${eventType}||${region}||${start}||${end}`;
+    // Group by run_id when available (set at submit time), fall back to param-based
+    // key for jobs created before run_id was introduced.
+    const key = job.run_id ?? `${eventType}||${region}||${start}||${end}`;
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(job);
   }
@@ -77,6 +80,7 @@ function buildRunGroups(jobs: Job[]): RunGroup[] {
         endDate:   first.params?.end_date   ?? "",
         jobs: groupJobs,
         mostRecentAt,
+        isOwner: groupJobs.every((j) => j.is_owner !== false),
       } satisfies RunGroup;
     })
     .sort((a, b) => b.mostRecentAt.localeCompare(a.mostRecentAt));
@@ -145,6 +149,7 @@ export class BenchmarkStore {
   }
 
   async submitRuns(data: MultiRunFormData): Promise<void> {
+    const runId = crypto.randomUUID();
     const results = await Promise.all(
       data.modelNames.map((modelName) =>
         submitJob({
@@ -154,12 +159,13 @@ export class BenchmarkStore {
             ...data.sharedParams,
             ...(data.perModelOverrides?.[modelName] ?? {}),
           },
+          run_id: runId,
         })
       )
     );
     this.jobs = [...results, ...untrack(() => this.jobs)];
     const first = results[0];
-    const key = `${first.params?.event_type ?? "monsoon_onset"}||${first.params?.region ?? "unknown"}||${first.params?.start_date ?? "unknown"}||${first.params?.end_date ?? "unknown"}`;
+    const key = first.run_id ?? `${first.params?.event_type ?? "monsoon_onset"}||${first.params?.region ?? "unknown"}||${first.params?.start_date ?? "unknown"}||${first.params?.end_date ?? "unknown"}`;
     this.selectedGroupKey = key;
     this.showForm = false;
   }

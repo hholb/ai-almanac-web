@@ -28,6 +28,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+// ---- Regions -----------------------------------------------------------------
+
+export async function getRegions() {
+  return request<Region[]>("/regions");
+}
+
 // ---- Datasets ----------------------------------------------------------------
 
 export async function getDatasets() {
@@ -113,6 +119,14 @@ export async function fetchResultBlob(resultUrl: string): Promise<string> {
 
 // ---- Types -------------------------------------------------------------------
 
+export type Region = {
+  id: string;
+  display_name: string;
+  romp_region: string;
+  description: string;
+  has_data: boolean;
+};
+
 export type Dataset = {
   id: string;
   name: string;
@@ -120,6 +134,8 @@ export type Dataset = {
   is_demo: boolean;
   created_at: string;
   obs_file_pattern?: string | null;
+  obs_year_start?: number | null;
+  obs_year_end?: number | null;
 };
 
 export type JobStatus = "running" | "complete" | "failed";
@@ -136,6 +152,8 @@ export type Job = {
   started_at?: string;
   completed_at?: string;
   error?: string | null;
+  is_owner?: boolean;
+  run_id?: string | null;
 };
 
 export type JobParams = {
@@ -177,6 +195,7 @@ export type SubmitJobParams = {
   dataset_id: string;
   model_name: string;
   params: JobParams;
+  run_id?: string;
 };
 
 export type ModelConfig = {
