@@ -14,6 +14,21 @@ from ..services.storage import get_storage
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
+def _obs_year_range(obs_dir: str) -> tuple[int | None, int | None]:
+    """Scan obs_dir for {year}.nc files and return (min_year, max_year)."""
+    from pathlib import Path
+    p = Path(obs_dir)
+    if not p.is_dir():
+        return None, None
+    years = []
+    for f in p.iterdir():
+        if f.suffix == ".nc" and f.stem.isdigit():
+            years.append(int(f.stem))
+    if not years:
+        return None, None
+    return min(years), max(years)
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -28,6 +43,8 @@ class DatasetOut(BaseModel):
     error: str | None = None
     is_demo: bool = False
     obs_file_pattern: str | None = None
+    obs_year_start: int | None = None
+    obs_year_end: int | None = None
 
 
 class UploadUrlRequest(BaseModel):
@@ -96,11 +113,13 @@ async def confirm_upload(dataset_id: str, user: CurrentUser):
                 text("UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id"),
                 {"now": now, "id": dataset_id},
             )
-            updated = conn.execute(
+            result = conn.execute(
                 text("UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id RETURNING *"),
                 {"now": now, "id": dataset_id},
-            ).mappings().fetchone()
-            return dict(updated), None
+            )
+            updated = dict(result.mappings().fetchone())
+            result.close()
+            return updated, None
 
     result, err = await asyncio.to_thread(_confirm)
     if err == "not_found":
@@ -124,17 +143,19 @@ async def list_datasets(user: CurrentUser):
     rows = await asyncio.to_thread(_list)
     user_datasets = [DatasetOut(**r) for r in rows]
 
-    demo_datasets = [
-        DatasetOut(
+    demo_datasets = []
+    for d in get_demo_datasets():
+        yr_start, yr_end = _obs_year_range(d["obs_dir"])
+        demo_datasets.append(DatasetOut(
             id=d["id"],
             name=d["name"],
             status="ready",
             created_at="",
             is_demo=True,
             obs_file_pattern=d.get("obs_file_pattern"),
-        )
-        for d in get_demo_datasets()
-    ]
+            obs_year_start=yr_start,
+            obs_year_end=yr_end,
+        ))
 
     return demo_datasets + user_datasets
 
@@ -161,11 +182,14 @@ async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
 
     def _insert():
         with get_db() as conn:
-            return dict(conn.execute(
+            result = conn.execute(
                 text("INSERT INTO datasets (id, user_id, name, status, storage_key, created_at, ready_at) "
                      "VALUES (:id, :uid, :name, 'ready', :key, :now, :now) RETURNING *"),
                 {"id": dataset_id, "uid": user["id"], "name": body.name, "key": body.obs_dir, "now": now},
-            ).mappings().fetchone())
+            )
+            row = dict(result.mappings().fetchone())
+            result.close()
+            return row
 
     return DatasetOut(**await asyncio.to_thread(_insert))
 

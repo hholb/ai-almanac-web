@@ -85,6 +85,7 @@ class JobCreate(BaseModel):
     model_name: str
     obs_dir: str | None = None
     params: RompParams = RompParams()
+    run_id: str | None = None
 
 
 class JobOut(BaseModel):
@@ -99,6 +100,8 @@ class JobOut(BaseModel):
     started_at: str | None
     completed_at: str | None
     error: str | None
+    is_owner: bool = True
+    run_id: str | None = None
 
 
 class ResultFile(BaseModel):
@@ -154,8 +157,10 @@ class JobGridResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _row_to_job_out(row: dict) -> JobOut:
+def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
     cfg = json.loads(row.get("config_json") or "{}")
+    owner_id = row.get("user_id")
+    is_owner = (current_user_id is None) or (owner_id == current_user_id)
     return JobOut(
         id=row["id"],
         dataset_id=row["dataset_id"],
@@ -168,6 +173,8 @@ def _row_to_job_out(row: dict) -> JobOut:
         started_at=row.get("started_at"),
         completed_at=row.get("completed_at"),
         error=row.get("error"),
+        is_owner=is_owner,
+        run_id=row.get("run_id"),
     )
 
 
@@ -249,16 +256,19 @@ async def create_job(body: JobCreate, user: CurrentUser):
 
     def _insert():
         with get_db() as conn:
-            return dict(conn.execute(
-                text("INSERT INTO jobs (id, user_id, dataset_id, status, config_json, created_at, started_at) "
-                     "VALUES (:id, :uid, :did, 'running', :cfg, :now, :now) RETURNING *"),
+            result = conn.execute(
+                text("INSERT INTO jobs (id, user_id, dataset_id, status, config_json, run_id, created_at, started_at) "
+                     "VALUES (:id, :uid, :did, 'running', :cfg, :run_id, :now, :now) RETURNING *"),
                 {"id": job_id, "uid": user["id"], "did": body.dataset_id,
-                 "cfg": json.dumps(config), "now": now},
-            ).mappings().fetchone())
+                 "cfg": json.dumps(config), "run_id": body.run_id, "now": now},
+            )
+            row = dict(result.mappings().fetchone())
+            result.close()
+            return row
 
     row = await asyncio.to_thread(_insert)
     get_runner().run_job(job_id, config)
-    return _row_to_job_out(row)
+    return _row_to_job_out(row, user["id"])
 
 
 @router.get("", response_model=list[JobOut])
@@ -271,7 +281,7 @@ async def list_jobs(user: CurrentUser):
             ).mappings().fetchall()]
 
     rows = await asyncio.to_thread(_list)
-    return [_row_to_job_out(r) for r in rows]
+    return [_row_to_job_out(r, user["id"]) for r in rows]
 
 
 @router.get("/{job_id}", response_model=JobOut)
@@ -287,7 +297,7 @@ async def get_job(job_id: str, user: CurrentUser):
     row = await asyncio.to_thread(_get)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _row_to_job_out(row)
+    return _row_to_job_out(row, user["id"])
 
 
 @router.get("/{job_id}/logs")
