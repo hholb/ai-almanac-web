@@ -22,6 +22,14 @@ resource "google_artifact_registry_repository_iam_member" "cloud_run_pull" {
   member     = "serviceAccount:service-${data.google_project.project.number}@serverless-robot-prod.iam.gserviceaccount.com"
 }
 
+# Backend SA needs AR read to validate images when calling create_job
+resource "google_artifact_registry_repository_iam_member" "backend_pull" {
+  location   = var.region
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.backend.email}"
+}
+
 # Cloud Run Jobs pulls images using the job's service account (batch_worker)
 resource "google_artifact_registry_repository_iam_member" "batch_worker_pull" {
   location   = var.region
