@@ -79,4 +79,11 @@ export ROMP_MODEL_DIR="$LOCAL_MODEL"
 echo "    model staged: $(ls "$LOCAL_MODEL" | wc -l) files"
 
 echo "==> Staging complete. Handing off to ROMP..."
-exec /app/scripts/entrypoint.sh
+/app/scripts/entrypoint.sh
+EXIT_CODE=$?
+# Allow GCSFuse write sidecar time to flush output files to GCS before the
+# container exits. Without this, Cloud Run kills the sidecar mid-flush and
+# reports an "Internal error" even when ROMP exits cleanly.
+sync
+sleep 10
+exit $EXIT_CODE
