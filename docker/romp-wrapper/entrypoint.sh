@@ -14,7 +14,7 @@ END_YEAR="${ROMP_END_DATE:0:4}"
 echo "==> Staging obs data (${START_YEAR}–${END_YEAR}) from ${ROMP_OBS_DIR} ..."
 LOCAL_OBS="${LOCAL}/obs"
 mkdir -p "$LOCAL_OBS"
-OBS_PATTERN="${ROMP_OBS_FILE_PATTERN:-\{\}.nc}"
+OBS_PATTERN="${ROMP_OBS_FILE_PATTERN:-{}.nc}"
 for year in $(seq "$START_YEAR" "$END_YEAR"); do
     filename="${OBS_PATTERN//\{\}/$year}"
     src="${ROMP_OBS_DIR}/${filename}"
@@ -38,4 +38,4 @@ export ROMP_MODEL_DIR="$LOCAL_MODEL"
 echo "    model staged: $(ls "$LOCAL_MODEL" | wc -l) files"
 
 echo "==> Staging complete. Handing off to ROMP..."
-exec /scripts/entrypoint.sh
+exec /app/scripts/entrypoint.sh

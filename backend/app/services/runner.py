@@ -205,7 +205,6 @@ class CloudRunJobRunner(JobRunner):
                             limits={
                                 "cpu": self._job_cpu,
                                 "memory": self._job_memory,
-                                "ephemeral-storage": self._job_ephemeral_storage,
                             },
                         ),
                     )],
