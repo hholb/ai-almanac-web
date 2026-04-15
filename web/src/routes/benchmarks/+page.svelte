@@ -6,10 +6,11 @@
   import { BenchmarkStore, type MultiRunFormData } from "$lib/benchmarks.svelte";
   import ResultsViewer from "$lib/components/ResultsViewer.svelte";
   import JobLogs from "$lib/components/JobLogs.svelte";
-  import { getModels, getDatasets, type ModelConfig, type Dataset, type JobParams } from "$lib/api";
+  import { getModels, getDatasets, getRegions, type ModelConfig, type Dataset, type Region, type JobParams } from "$lib/api";
 
   const store = new BenchmarkStore();
 
+  let regions = $state<Region[]>([]);
   let models = $state<ModelConfig[]>([]);
   let datasets = $state<Dataset[]>([]);
   let dataLoaded = $state(false);
@@ -18,7 +19,10 @@
     if (!$isAuthenticated) return;
     const groupKey = $page.url.searchParams.get("group");
     store.load(groupKey);
-    const [fetchedModels, fetchedDatasets] = await Promise.allSettled([getModels(), getDatasets()]);
+    const [fetchedRegions, fetchedModels, fetchedDatasets] = await Promise.allSettled([
+      getRegions(), getModels(), getDatasets(),
+    ]);
+    if (fetchedRegions.status === "fulfilled") regions = fetchedRegions.value;
     if (fetchedModels.status === "fulfilled" && fetchedModels.value.length > 0) {
       models = fetchedModels.value;
     }
@@ -39,13 +43,7 @@
 
   let form = $state({
     datasetId: "",
-    region: "India",
-    startDate: "2015-05-01",
-    endDate: "2015-07-31",
-    startYearClim: 2013,
-    endYearClim: 2015,
     maxForecastDay: null as number | null,
-    initDays: "2,5",
     parallel: false,
     // Advanced — obs overrides
     obs: "",
@@ -60,6 +58,8 @@
     threshFile: "",
   });
 
+  let selectedRegion = $state<Region | null>(null);
+  let selectedDataset = $derived(datasets.find((d) => d.id === form.datasetId) ?? null);
   let selectedModelIds = $state<string[]>([]);
   let perModelOverrides = $state<Record<string, Record<string, string | boolean | number>>>({});
   let submitting = $state(false);
@@ -150,25 +150,36 @@
     selectedModelIds = [...selectedModelIds, id];
     if (!cfg) return;
 
-    // First model selected → seed shared params from it
-    if (selectedModelIds.length === 1) {
-      form.startDate      = cfg.start_date;
-      form.endDate        = cfg.end_date;
-      form.startYearClim  = cfg.start_year_clim;
-      form.endYearClim    = cfg.end_year_clim;
-      form.initDays       = cfg.init_days;
-    }
+    // Seed per-model overrides. Dates and clim years are per-model because each
+    // model covers a different hindcast period — they must not be shared.
+    // Clamp to obs availability so ROMP never requests a year without obs data.
+    const obsStart = selectedDataset?.obs_year_start ?? null;
+    const obsEnd   = selectedDataset?.obs_year_end   ?? null;
 
-    // Seed per-model overrides with model-specific technical params only.
-    // Date ranges are shared across all models in a run (the evaluation window).
+    const clampYear = (year: number) => {
+      let y = year;
+      if (obsStart !== null) y = Math.max(y, obsStart);
+      if (obsEnd   !== null) y = Math.min(y, obsEnd);
+      return y;
+    };
+    const clampDate = (dateStr: string) => {
+      const year = parseInt(dateStr.slice(0, 4));
+      return String(clampYear(year)) + dateStr.slice(4);
+    };
+
     perModelOverrides = {
       ...perModelOverrides,
       [id]: {
-        init_days:     cfg.init_days,
-        probabilistic: cfg.probabilistic,
-        members:       cfg.members ?? "",
-        model_var:     cfg.model_var !== "tp" ? cfg.model_var : "",
-        file_pattern:  cfg.file_pattern !== "{}.nc" ? cfg.file_pattern : "",
+        start_date:      clampDate(cfg.start_date),
+        end_date:        clampDate(cfg.end_date),
+        start_year_clim: clampYear(cfg.start_year_clim),
+        end_year_clim:   clampYear(cfg.end_year_clim),
+        init_days:       cfg.init_days,
+        parallel:        !cfg.probabilistic,
+        probabilistic:   cfg.probabilistic,
+        members:         cfg.members ?? "",
+        model_var:       cfg.model_var !== "tp" ? cfg.model_var : "",
+        file_pattern:    cfg.file_pattern !== "{}.nc" ? cfg.file_pattern : "",
       },
     };
   }
@@ -192,13 +203,7 @@
     try {
       const sharedParams: JobParams = {
         event_type: selectedEventType ?? "monsoon_onset",
-        region: form.region,
-        start_date: form.startDate,
-        end_date: form.endDate,
-        start_year_clim: form.startYearClim,
-        end_year_clim: form.endYearClim,
-        init_days: form.initDays,
-        parallel: form.parallel,
+        region: selectedRegion!.romp_region,
         ...(form.maxForecastDay != null && { max_forecast_day: form.maxForecastDay }),
         ...(form.obs            && { obs: form.obs }),
         ...(form.obsFilePattern && { obs_file_pattern: form.obsFilePattern }),
@@ -210,16 +215,22 @@
         ...(form.threshFile   && { thresh_file: form.threshFile }),
       };
 
-      // Per-model overrides: technical model params only (dates are shared).
+      // Per-model overrides: all date/clim/technical params are per-model since
+      // each model covers a different hindcast and climatological period.
       const overrides: Record<string, Partial<JobParams>> = {};
       for (const mid of selectedModelIds) {
         const overrideMap = perModelOverrides[mid] ?? {};
         const o: Partial<JobParams> = {};
-        if (overrideMap.init_days)   o.init_days   = String(overrideMap.init_days);
-        if (overrideMap.model_var)   o.model_var   = String(overrideMap.model_var);
+        if (overrideMap.start_date)   o.start_date   = String(overrideMap.start_date);
+        if (overrideMap.end_date)     o.end_date     = String(overrideMap.end_date);
+        if (overrideMap.init_days)    o.init_days    = String(overrideMap.init_days);
+        if (overrideMap.parallel !== undefined) o.parallel = Boolean(overrideMap.parallel);
+        if (overrideMap.model_var)    o.model_var    = String(overrideMap.model_var);
         if (overrideMap.file_pattern) o.file_pattern = String(overrideMap.file_pattern);
-        if (overrideMap.members)     o.members     = String(overrideMap.members);
+        if (overrideMap.members)      o.members      = String(overrideMap.members);
         if (overrideMap.probabilistic !== undefined) o.probabilistic = Boolean(overrideMap.probabilistic);
+        if (overrideMap.start_year_clim != null) o.start_year_clim = Number(overrideMap.start_year_clim);
+        if (overrideMap.end_year_clim   != null) o.end_year_clim   = Number(overrideMap.end_year_clim);
         overrides[mid] = o;
       }
 
@@ -256,59 +267,116 @@
     <button
       class="new-run-btn"
       class:active={store.showForm}
-      onclick={() => { store.showForm = true; store.selectedGroupKey = null; selectedEventType = null; }}
+      onclick={() => { store.showForm = true; store.selectedGroupKey = null; selectedRegion = null; selectedEventType = null; }}
     >
       + New Benchmark
     </button>
 
     {#if store.runGroups.length > 0}
-      <p class="sidebar-title">Benchmarks</p>
-      <ul class="group-list">
-        {#each store.runGroups as group}
-          <li class="group-list-item">
-            <button
-              class="group-item"
-              class:selected={store.selectedGroupKey === group.key && !store.showForm}
-              onclick={() => selectGroup(group.key)}
-            >
-              <span class="group-event-type">{EVENT_TYPES.find(e => e.id === group.eventType)?.shortName ?? group.eventType}</span>
-              <span class="group-region">{group.region}</span>
-              {#if group.startDate && group.endDate}
-                <span class="group-dates">{group.startDate} – {group.endDate}</span>
-              {/if}
-              <div class="group-badges">
-                <span class="badge-count">{group.jobs.length} model{group.jobs.length !== 1 ? "s" : ""}</span>
-                {#if group.jobs.some((j) => j.status === "running")}
-                  <span class="status-badge running">running</span>
-                {:else if group.jobs.every((j) => j.status === "complete")}
-                  <span class="status-badge complete">complete</span>
-                {:else if group.jobs.every((j) => j.status === "failed")}
-                  <span class="status-badge failed">failed</span>
-                {:else}
-                  <span class="status-badge mixed">mixed</span>
+      {@const myGroups = store.runGroups.filter((g) => g.isOwner)}
+      {@const sharedGroups = store.runGroups.filter((g) => !g.isOwner)}
+
+      {#snippet groupList(groups: typeof store.runGroups)}
+        <ul class="group-list">
+          {#each groups as group}
+            <li class="group-list-item">
+              <button
+                class="group-item"
+                class:selected={store.selectedGroupKey === group.key && !store.showForm}
+                onclick={() => selectGroup(group.key)}
+              >
+                <span class="group-event-type">{EVENT_TYPES.find(e => e.id === group.eventType)?.shortName ?? group.eventType}</span>
+                <span class="group-region">{group.region}</span>
+                {#if group.startDate && group.endDate}
+                  <span class="group-dates">{group.startDate} – {group.endDate}</span>
                 {/if}
-              </div>
-            </button>
-            <button
-              class="group-delete"
-              title="Delete run set"
-              onclick={(e) => { e.stopPropagation(); store.deleteGroup(group.key); }}
-            >&times;</button>
-          </li>
-        {/each}
-      </ul>
+                <div class="group-badges">
+                  <span class="badge-count">{group.jobs.length} model{group.jobs.length !== 1 ? "s" : ""}</span>
+                  {#if group.jobs.some((j) => j.status === "running")}
+                    <span class="status-badge running">running</span>
+                  {:else if group.jobs.every((j) => j.status === "complete")}
+                    <span class="status-badge complete">complete</span>
+                  {:else if group.jobs.every((j) => j.status === "failed")}
+                    <span class="status-badge failed">failed</span>
+                  {:else}
+                    <span class="status-badge mixed">mixed</span>
+                  {/if}
+                </div>
+              </button>
+              {#if group.isOwner}
+                <button
+                  class="group-delete"
+                  title="Delete run set"
+                  onclick={(e) => { e.stopPropagation(); store.deleteGroup(group.key); }}
+                >&times;</button>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/snippet}
+
+      <details class="sidebar-section" open>
+        <summary class="sidebar-title">My Benchmarks <span class="sidebar-count">{myGroups.length}</span></summary>
+        {#if myGroups.length > 0}
+          {@render groupList(myGroups)}
+        {:else}
+          <p class="sidebar-empty">No benchmarks yet.</p>
+        {/if}
+      </details>
+
+      {#if sharedGroups.length > 0}
+        <details class="sidebar-section">
+          <summary class="sidebar-title">Shared With Me <span class="sidebar-count">{sharedGroups.length}</span></summary>
+          {@render groupList(sharedGroups)}
+        </details>
+      {/if}
     {/if}
   </aside>
 
   <!-- Main content -->
   <div class="main-content">
 
-    {#if store.showForm && !selectedEventType}
-      <!-- ---- Event type picker ---- -->
+    {#if store.showForm && !selectedRegion}
+      <!-- ---- Step 1: Region picker ---- -->
       <header class="detail-header">
-        <p class="detail-eyebrow">New Benchmark</p>
-        <h1 class="detail-title">Choose an Event Type</h1>
-        <p class="detail-subtitle">Select the type of weather event to benchmark. Each type uses its own onset definition and evaluation criteria.</p>
+        <p class="detail-eyebrow">New Benchmark · Step 1 of 3</p>
+        <h1 class="detail-title">Choose a Region</h1>
+        <p class="detail-subtitle">Select the geographic region for this benchmark. The region determines which observation datasets and onset definitions are available.</p>
+      </header>
+      <hr class="divider" />
+
+      <div class="event-type-grid">
+        {#each regions as r}
+          <button
+            type="button"
+            class="event-type-card"
+            class:no-data={!r.has_data}
+            onclick={() => { if (r.has_data) selectedRegion = r; }}
+          >
+            <div class="etc-top">
+              <span class="etc-name">{r.display_name}</span>
+              {#if r.has_data}
+                <span class="etc-active-badge">Data available</span>
+              {:else}
+                <span class="etc-soon-badge">No data configured</span>
+              {/if}
+            </div>
+            <p class="etc-desc">{r.description}</p>
+          </button>
+        {/each}
+      </div>
+
+    {:else if store.showForm && selectedRegion && !selectedEventType}
+      <!-- ---- Step 2: Event type picker ---- -->
+      <header class="detail-header">
+        <div class="detail-header-row">
+          <button class="back-btn" onclick={() => { selectedRegion = null; }} title="Back to region selection">← Back</button>
+          <div>
+            <p class="detail-eyebrow">New Benchmark · Step 2 of 3</p>
+            <h1 class="detail-title">Choose an Event Type</h1>
+            <p class="detail-subtitle">Select the type of weather event to benchmark for <strong>{selectedRegion.display_name}</strong>.</p>
+          </div>
+        </div>
       </header>
       <hr class="divider" />
 
@@ -342,17 +410,15 @@
         {/each}
       </div>
 
-    {:else if store.showForm && selectedEventType}
-      <!-- ---- New Benchmark form ---- -->
+    {:else if store.showForm && selectedRegion && selectedEventType}
+      <!-- ---- Step 3: Configure & run ---- -->
       {@const eventTypeMeta = EVENT_TYPES.find(e => e.id === selectedEventType)}
       <header class="detail-header">
         <div class="detail-header-row">
-          <button class="back-btn" onclick={() => { selectedEventType = null; }} title="Back to event type selection">
-            ← Back
-          </button>
+          <button class="back-btn" onclick={() => { selectedEventType = null; }} title="Back to event type selection">← Back</button>
           <div>
-            <p class="detail-eyebrow">Configure</p>
-            <h1 class="detail-title">New Benchmark</h1>
+            <p class="detail-eyebrow">New Benchmark · Step 3 of 3 · {selectedRegion.display_name}</p>
+            <h1 class="detail-title">Configure Benchmark</h1>
             <p class="detail-event-type">{eventTypeMeta?.name ?? selectedEventType}</p>
           </div>
         </div>
@@ -447,40 +513,13 @@
         </fieldset>
 
         <fieldset>
-          <legend>Parameters</legend>
+          <legend>Options</legend>
           <div class="field-row">
-            <label><span class="label-text">Region <span class="tip" data-tip="Geographic domain for onset evaluation (e.g. 'India', 'Ethiopia')">ⓘ</span></span>
-              <input bind:value={form.region} required />
-            </label>
-            <label><span class="label-text">Start Date <span class="tip" data-tip="Start of the evaluation window">ⓘ</span></span>
-              <input type="date" bind:value={form.startDate} required />
-            </label>
-            <label><span class="label-text">End Date <span class="tip" data-tip="End of the evaluation window. Must fall within the selected models' hindcast periods.">ⓘ</span></span>
-              <input type="date" bind:value={form.endDate} required />
+            <label><span class="label-text">Max Forecast Day <span class="tip" data-tip="Cap the lead time evaluated (days). Leave blank to include all available forecast days.">ⓘ</span></span>
+              <input type="number" bind:value={form.maxForecastDay} placeholder="optional" />
             </label>
           </div>
         </fieldset>
-
-        <details class="param-section" open>
-          <summary>Common Options</summary>
-          <fieldset class="nested-fieldset">
-            <div class="field-row">
-              <label><span class="label-text">Clim Start Year <span class="tip" data-tip="First year of the climatology baseline used to compute local wet-spell thresholds for onset detection">ⓘ</span></span>
-                <input type="number" bind:value={form.startYearClim} />
-              </label>
-              <label><span class="label-text">Clim End Year <span class="tip" data-tip="Last year of climatology baseline — should end before the evaluation window starts">ⓘ</span></span>
-                <input type="number" bind:value={form.endYearClim} />
-              </label>
-              <label><span class="label-text">Max Forecast Day <span class="tip" data-tip="Cap the lead time evaluated (days). Leave blank to include all available forecast days.">ⓘ</span></span>
-                <input type="number" bind:value={form.maxForecastDay} placeholder="optional" />
-              </label>
-              <label><span class="label-text">Init Days <span class="tip" data-tip="Comma-separated initialization day offsets within each week. '2,5' corresponds to Mon/Thu twice-weekly runs.">ⓘ</span></span>
-                <input bind:value={form.initDays} placeholder="e.g. 2,5" />
-              </label>
-              <label class="checkbox-label"><input type="checkbox" bind:checked={form.parallel} /> <span class="label-text">Parallel <span class="tip" data-tip="Process multiple model initializations concurrently for faster throughput">ⓘ</span></span></label>
-            </div>
-          </fieldset>
-        </details>
 
         {#if selectedModelIds.length > 0}
           <details class="param-section" open>
@@ -495,7 +534,37 @@
                   {/if}
                 </div>
                 <div class="field-row">
-                  <label><span class="label-text">Init Days <span class="tip" data-tip="Override initialization day offsets for this model. Leave unchanged to use the shared setting above.">ⓘ</span></span>
+                  <label><span class="label-text">Start Date <span class="tip" data-tip="Start of the evaluation window for this model.">ⓘ</span></span>
+                    <input
+                      type="date"
+                      value={getOverride(modelId, "start_date", cfg?.start_date ?? "")}
+                      oninput={(e) => setOverride(modelId, "start_date", (e.target as HTMLInputElement).value)}
+                      required
+                    />
+                  </label>
+                  <label><span class="label-text">End Date <span class="tip" data-tip="End of the evaluation window for this model.">ⓘ</span></span>
+                    <input
+                      type="date"
+                      value={getOverride(modelId, "end_date", cfg?.end_date ?? "")}
+                      oninput={(e) => setOverride(modelId, "end_date", (e.target as HTMLInputElement).value)}
+                      required
+                    />
+                  </label>
+                  <label><span class="label-text">Clim Start Year <span class="tip" data-tip="First year of the climatological reference period for onset threshold computation.">ⓘ</span></span>
+                    <input
+                      type="number"
+                      value={getOverride(modelId, "start_year_clim", cfg?.start_year_clim ?? "")}
+                      oninput={(e) => setOverride(modelId, "start_year_clim", (e.target as HTMLInputElement).value)}
+                    />
+                  </label>
+                  <label><span class="label-text">Clim End Year <span class="tip" data-tip="Last year of the climatological reference period. Must cover the evaluation years.">ⓘ</span></span>
+                    <input
+                      type="number"
+                      value={getOverride(modelId, "end_year_clim", cfg?.end_year_clim ?? "")}
+                      oninput={(e) => setOverride(modelId, "end_year_clim", (e.target as HTMLInputElement).value)}
+                    />
+                  </label>
+                  <label><span class="label-text">Init Days <span class="tip" data-tip="Comma-separated initialization day offsets within each week. '0,3' = Mon/Thu.">ⓘ</span></span>
                     <input
                       value={getOverride(modelId, "init_days", cfg?.init_days ?? "")}
                       oninput={(e) => setOverride(modelId, "init_days", (e.target as HTMLInputElement).value)}
@@ -504,13 +573,21 @@
                   <label class="checkbox-label">
                     <input
                       type="checkbox"
+                      checked={getOverride(modelId, "parallel", !cfg?.probabilistic)}
+                      onchange={(e) => setOverride(modelId, "parallel", (e.target as HTMLInputElement).checked)}
+                    />
+                    <span class="label-text">Parallel <span class="tip" data-tip="Run years concurrently. On by default for deterministic models; disable for large ensemble models if jobs run out of memory.">ⓘ</span></span>
+                  </label>
+                  <label class="checkbox-label">
+                    <input
+                      type="checkbox"
                       checked={getOverride(modelId, "probabilistic", cfg?.probabilistic ?? false)}
                       onchange={(e) => setOverride(modelId, "probabilistic", (e.target as HTMLInputElement).checked)}
                     />
-                    <span class="label-text">Probabilistic <span class="tip" data-tip="Treat this model as an ensemble and compute probabilistic metrics (Brier Score, RPS, AUC) in addition to deterministic ones.">ⓘ</span></span>
+                    <span class="label-text">Probabilistic <span class="tip" data-tip="Compute probabilistic metrics (Brier Score, RPS, AUC) in addition to deterministic ones.">ⓘ</span></span>
                   </label>
                   {#if getOverride(modelId, "probabilistic", cfg?.probabilistic ?? false)}
-                    <label><span class="label-text">Members <span class="tip" data-tip="Number of ensemble members to use. Enter a count (e.g. '11', '51') or 'All' to include every available member.">ⓘ</span></span>
+                    <label><span class="label-text">Members <span class="tip" data-tip="Number of ensemble members to use. Enter a count (e.g. '11', '51') or 'All'.">ⓘ</span></span>
                       <input
                         value={getOverride(modelId, "members", cfg?.members ?? "")}
                         placeholder="e.g. 11 or All"
@@ -571,10 +648,10 @@
           <p class="tips-heading">Quick start tips</p>
           <ul class="tips-list">
             <li>Select multiple models to compare them side by side in the same run set.</li>
-            <li>Make sure your evaluation dates fall within all selected models' hindcast periods (shown in the model reference above).</li>
-            <li>Most models initialize twice weekly (Mon/Thu) — the default init days of "2,5" reflects this. AIFS daily uses consecutive days.</li>
-            <li>Climatology years define the local wet-spell threshold for onset detection. A 3–5 year window ending before your evaluation start is typical.</li>
-            <li>For India, onset uses the Moron &amp; Robertson definition (Modified MOK, anchored to June 2). For Ethiopia, it uses the ICPAC 3-day accumulation threshold.</li>
+            <li>Each model's evaluation dates are pre-filled from its hindcast coverage — adjust per model if needed.</li>
+            <li>Clim years define the baseline for onset threshold computation and must cover the evaluation years.</li>
+            <li>Most models initialize twice weekly (Mon/Thu) — init days "0,3" reflects this.</li>
+            <li>Disable Parallel for large probabilistic models (e.g. GenCast) if jobs are running out of memory.</li>
           </ul>
         </div>
 
@@ -693,13 +770,48 @@
   }
   .new-run-btn:hover, .new-run-btn.active { background: var(--color-accent-hover); transform: translateY(-1px); }
 
+  .sidebar-section {
+    margin-top: 0.5rem;
+  }
+  .sidebar-section > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 3px;
+    user-select: none;
+  }
+  .sidebar-section > summary:hover { background: var(--color-surface-raised); }
+  .sidebar-section > summary::before {
+    content: "▶";
+    font-size: 0.5rem;
+    color: var(--color-text-muted);
+    transition: transform 0.15s;
+    flex-shrink: 0;
+  }
+  .sidebar-section[open] > summary::before { transform: rotate(90deg); }
+
   .sidebar-title {
     font-size: 0.65rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--color-text-muted);
-    margin: 0.25rem 0 0 0.25rem;
+    margin: 0;
+  }
+  .sidebar-count {
+    font-size: 0.6rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    opacity: 0.7;
+  }
+  .sidebar-empty {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    padding: 0.4rem 0.5rem;
+    opacity: 0.6;
   }
 
   .group-list {
@@ -970,13 +1082,14 @@
     transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s, transform 0.1s;
     font-family: var(--font-body);
   }
-  .event-type-card:not(.coming-soon):hover {
+  .event-type-card:not(.coming-soon):not(.no-data):hover {
     border-color: var(--color-accent);
     background: var(--color-surface-raised);
     box-shadow: 0 0 0 3px var(--color-accent-glow), 0 4px 16px rgba(0,0,0,0.2);
     transform: translateY(-2px);
   }
-  .event-type-card.coming-soon {
+  .event-type-card.coming-soon,
+  .event-type-card.no-data {
     opacity: 0.45;
     cursor: default;
   }
