@@ -19,13 +19,10 @@
     if (!$isAuthenticated) return;
     const groupKey = $page.url.searchParams.get("group");
     store.load(groupKey);
-    const [fetchedRegions, fetchedModels, fetchedDatasets] = await Promise.allSettled([
-      getRegions(), getModels(), getDatasets(),
+    const [fetchedRegions, fetchedDatasets] = await Promise.allSettled([
+      getRegions(), getDatasets(),
     ]);
     if (fetchedRegions.status === "fulfilled") regions = fetchedRegions.value;
-    if (fetchedModels.status === "fulfilled" && fetchedModels.value.length > 0) {
-      models = fetchedModels.value;
-    }
     if (fetchedDatasets.status === "fulfilled") {
       datasets = fetchedDatasets.value;
       const first = datasets[0];
@@ -35,6 +32,12 @@
       }
     }
     dataLoaded = true;
+  });
+
+  // Reload models whenever the selected region changes.
+  $effect(() => {
+    if (!$isAuthenticated || !selectedRegion) return;
+    getModels(selectedRegion.id).then((m) => { if (m.length > 0) models = m; });
   });
 
   onDestroy(() => store.stopPolling());
@@ -351,7 +354,7 @@
             type="button"
             class="event-type-card"
             class:no-data={!r.has_data}
-            onclick={() => { if (r.has_data) selectedRegion = r; }}
+            onclick={() => { if (r.has_data) { selectedRegion = r; selectedModelIds = []; perModelOverrides = {}; } }}
           >
             <div class="etc-top">
               <span class="etc-name">{r.display_name}</span>

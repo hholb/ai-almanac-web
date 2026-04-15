@@ -49,8 +49,9 @@ export async function createDatasetFromPath(name: string, obs_dir: string) {
 
 // ---- Jobs --------------------------------------------------------------------
 
-export async function getModels() {
-  return request<ModelConfig[]>("/jobs/models");
+export async function getModels(region?: string) {
+  const qs = region ? `?region=${encodeURIComponent(region)}` : "";
+  return request<ModelConfig[]>(`/jobs/models${qs}`);
 }
 
 export async function getJobs() {
@@ -201,6 +202,7 @@ export type SubmitJobParams = {
 export type ModelConfig = {
   id: string;
   display_name: string;
+  region: string;
   model_type: string;
   model_dir: string;
   model_var: string;

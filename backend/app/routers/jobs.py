@@ -201,8 +201,11 @@ def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 @router.get("/models")
-async def list_models():
-    return get_model_registry()
+async def list_models(region: str | None = None):
+    registry = get_model_registry()
+    if region:
+        registry = [m for m in registry if m.get("region", "").lower() == region.lower()]
+    return registry
 
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)

@@ -56,14 +56,21 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------------------
     demo_obs_datasets: str = ""
 
-    aifs_model_dir: str = ""
-    aifs_daily_model_dir: str = ""
-    ifs_model_dir: str = ""
-    neuralgcm_model_dir: str = ""
-    fuxi_model_dir: str = ""
-    graphcast_model_dir: str = ""
-    gencast_model_dir: str = ""
-    fuxi_s2s_model_dir: str = ""
+    # India model directories
+    india_aifs_model_dir: str = ""
+    india_aifs_daily_model_dir: str = ""
+    india_ifs_model_dir: str = ""
+    india_neuralgcm_model_dir: str = ""
+    india_fuxi_model_dir: str = ""
+    india_graphcast_model_dir: str = ""
+    india_gencast_model_dir: str = ""
+    india_fuxi_s2s_model_dir: str = ""
+
+    # Ethiopia model directories
+    ethiopia_aifs_model_dir: str = ""
+    ethiopia_fuxi_model_dir: str = ""
+    ethiopia_graphcast_model_dir: str = ""
+    ethiopia_gencast_model_dir: str = ""
 
 
 settings = Settings()
@@ -75,11 +82,13 @@ settings = Settings()
 
 def get_model_registry() -> list[dict]:
     candidates = [
+        # ---- India -------------------------------------------------------
         {
             "id": "aifs",
             "display_name": "AIFS",
+            "region": "india",
             "model_type": "AIWP",
-            "model_dir": settings.aifs_model_dir,
+            "model_dir": settings.india_aifs_model_dir,
             "model_var": "tp",
             "unit_cvt": 1000,
             "file_pattern": "{}.nc",
@@ -95,8 +104,9 @@ def get_model_registry() -> list[dict]:
         {
             "id": "aifs_daily",
             "display_name": "AIFS (Daily)",
+            "region": "india",
             "model_type": "AIWP",
-            "model_dir": settings.aifs_daily_model_dir,
+            "model_dir": settings.india_aifs_daily_model_dir,
             "model_var": "tp",
             "unit_cvt": 1000,
             "file_pattern": "{}.nc",
@@ -111,8 +121,9 @@ def get_model_registry() -> list[dict]:
         {
             "id": "ifs",
             "display_name": "IFS-S2S",
+            "region": "india",
             "model_type": "NWP",
-            "model_dir": settings.ifs_model_dir,
+            "model_dir": settings.india_ifs_model_dir,
             "model_var": "tp",
             "unit_cvt": 1000,
             "file_pattern": "{}.nc",
@@ -128,8 +139,9 @@ def get_model_registry() -> list[dict]:
         {
             "id": "neuralgcm",
             "display_name": "NeuralGCM",
+            "region": "india",
             "model_type": "AIWP",
-            "model_dir": settings.neuralgcm_model_dir,
+            "model_dir": settings.india_neuralgcm_model_dir,
             "model_var": "tp",
             "unit_cvt": 1000,
             "file_pattern": "{}.nc",
@@ -145,8 +157,9 @@ def get_model_registry() -> list[dict]:
         {
             "id": "fuxi",
             "display_name": "FuXi",
+            "region": "india",
             "model_type": "AIWP",
-            "model_dir": settings.fuxi_model_dir,
+            "model_dir": settings.india_fuxi_model_dir,
             "model_var": "tp",
             "unit_cvt": 1000,
             "file_pattern": "{}.nc",
@@ -162,8 +175,9 @@ def get_model_registry() -> list[dict]:
         {
             "id": "graphcast",
             "display_name": "GraphCast",
+            "region": "india",
             "model_type": "AIWP",
-            "model_dir": settings.graphcast_model_dir,
+            "model_dir": settings.india_graphcast_model_dir,
             "model_var": "tp",
             "unit_cvt": 1000,
             "file_pattern": "{}.nc",
@@ -179,8 +193,9 @@ def get_model_registry() -> list[dict]:
         {
             "id": "gencast",
             "display_name": "GenCast",
+            "region": "india",
             "model_type": "AIWP",
-            "model_dir": settings.gencast_model_dir,
+            "model_dir": settings.india_gencast_model_dir,
             "model_var": "tp",
             "unit_cvt": 1000,
             "file_pattern": "{}.nc",
@@ -196,8 +211,9 @@ def get_model_registry() -> list[dict]:
         {
             "id": "fuxi_s2s",
             "display_name": "FuXi-S2S",
+            "region": "india",
             "model_type": "AIWP",
-            "model_dir": settings.fuxi_s2s_model_dir,
+            "model_dir": settings.india_fuxi_s2s_model_dir,
             "model_var": "tp",
             "unit_cvt": 1000,
             "file_pattern": "{}.nc",
@@ -209,6 +225,75 @@ def get_model_registry() -> list[dict]:
             "end_date": "2021-07-31",
             "start_year_clim": 1991,
             "end_year_clim": 2021,
+        },
+        # ---- Ethiopia ----------------------------------------------------
+        {
+            "id": "aifs",
+            "display_name": "AIFS",
+            "region": "ethiopia",
+            "model_type": "AIWP",
+            "model_dir": settings.ethiopia_aifs_model_dir,
+            "model_var": "tp",
+            "unit_cvt": 1000,
+            "file_pattern": "{}.nc",
+            "probabilistic": False,
+            "members": None,
+            "init_days": "0,3",
+            "start_date": "1998-05-01",
+            "end_date": "2018-07-31",
+            "start_year_clim": 1998,
+            "end_year_clim": 2018,
+        },
+        {
+            "id": "fuxi",
+            "display_name": "FuXi",
+            "region": "ethiopia",
+            "model_type": "AIWP",
+            "model_dir": settings.ethiopia_fuxi_model_dir,
+            "model_var": "tp",
+            "unit_cvt": 1000,
+            "file_pattern": "{}.nc",
+            "probabilistic": False,
+            "members": None,
+            "init_days": "0,3",
+            "start_date": "1998-05-01",
+            "end_date": "2024-07-31",
+            "start_year_clim": 1998,
+            "end_year_clim": 2024,
+        },
+        {
+            "id": "graphcast",
+            "display_name": "GraphCast",
+            "region": "ethiopia",
+            "model_type": "AIWP",
+            "model_dir": settings.ethiopia_graphcast_model_dir,
+            "model_var": "tp",
+            "unit_cvt": 1000,
+            "file_pattern": "{}.nc",
+            "probabilistic": False,
+            "members": None,
+            "init_days": "0,3",
+            "start_date": "1998-05-01",
+            "end_date": "2024-07-31",
+            "start_year_clim": 1998,
+            "end_year_clim": 2024,
+        },
+        {
+            "id": "gencast",
+            "display_name": "GenCast",
+            "region": "ethiopia",
+            "model_type": "AIWP",
+            "model_dir": settings.ethiopia_gencast_model_dir,
+            "model_var": "tp",
+            "unit_cvt": 1000,
+            "file_pattern": "{}.nc",
+            "probabilistic": True,
+            "members": None,
+            "init_days": "0,3",
+            "start_date": "2019-05-01",
+            "end_date": "2024-07-31",
+            "start_year_clim": 1998,
+            "end_year_clim": 2024,
         },
     ]
     return [m for m in candidates if m["model_dir"]]
