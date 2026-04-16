@@ -233,7 +233,8 @@
         if (overrideMap.start_date)   o.start_date   = String(overrideMap.start_date);
         if (overrideMap.end_date)     o.end_date     = String(overrideMap.end_date);
         if (overrideMap.init_days)    o.init_days    = String(overrideMap.init_days);
-        if (overrideMap.parallel !== undefined) o.parallel = Boolean(overrideMap.parallel);
+        const isProbabilistic = Boolean(overrideMap.probabilistic);
+        o.parallel = isProbabilistic ? false : Boolean(overrideMap.parallel ?? true);
         if (overrideMap.model_var)    o.model_var    = String(overrideMap.model_var);
         if (overrideMap.file_pattern) o.file_pattern = String(overrideMap.file_pattern);
         if (overrideMap.members)      o.members      = String(overrideMap.members);
@@ -579,6 +580,7 @@
                       oninput={(e) => setOverride(modelId, "init_days", (e.target as HTMLInputElement).value)}
                     />
                   </label>
+                  {#if !getOverride(modelId, "probabilistic", cfg?.probabilistic ?? false)}
                   <label class="checkbox-label">
                     <input
                       type="checkbox"
@@ -587,6 +589,7 @@
                     />
                     <span class="label-text">Parallel <span class="tip" data-tip="Run years concurrently for faster results.">ⓘ</span></span>
                   </label>
+                  {/if}
                   <label class="checkbox-label">
                     <input
                       type="checkbox"
