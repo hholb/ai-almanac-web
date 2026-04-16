@@ -247,7 +247,11 @@ async def create_job(body: JobCreate, user: CurrentUser):
     now = datetime.now(timezone.utc).isoformat()
 
     romp_params = body.params.model_dump(exclude_none=True)
-    for key in ("date_filter_year", "probabilistic", "members"):
+    # Populate model-specific defaults from the registry if not provided by the caller.
+    # start_date/end_date are required by the wrapper entrypoint (used for year-range staging).
+    for key in ("date_filter_year", "probabilistic", "members",
+                "start_date", "end_date", "start_year_clim", "end_year_clim",
+                "init_days", "max_forecast_day"):
         if key not in romp_params and model_cfg.get(key) is not None:
             romp_params[key] = model_cfg[key]
 

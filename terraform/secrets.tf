@@ -48,3 +48,38 @@ resource "google_secret_manager_secret_iam_member" "backend_reads_db_password" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.backend.email}"
 }
+
+# ---------------------------------------------------------------------------
+# Modal credentials — used by ModalRunner to submit ROMP jobs
+# Populate after first apply:
+#   gcloud secrets versions add modal-token-id --data-file=<(echo -n "TOKEN_ID")
+#   gcloud secrets versions add modal-token-secret --data-file=<(echo -n "TOKEN_SECRET")
+# ---------------------------------------------------------------------------
+
+resource "google_secret_manager_secret" "modal_token_id" {
+  secret_id = "modal-token-id"
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret" "modal_token_secret" {
+  secret_id = "modal-token-secret"
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "backend_reads_modal_token_id" {
+  secret_id = google_secret_manager_secret.modal_token_id.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.backend.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "backend_reads_modal_token_secret" {
+  secret_id = google_secret_manager_secret.modal_token_secret.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.backend.email}"
+}

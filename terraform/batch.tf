@@ -38,20 +38,6 @@ resource "google_project_iam_member" "backend_logging_viewer" {
   member  = "serviceAccount:${google_service_account.backend.email}"
 }
 
-# Allow backend to create and run Cloud Run Jobs
-resource "google_project_iam_member" "backend_run_developer" {
-  project = var.project_id
-  role    = "roles/run.developer"
-  member  = "serviceAccount:${google_service_account.backend.email}"
-}
-
-# Backend needs to be able to act as the worker SA when submitting jobs
-resource "google_service_account_iam_member" "backend_acts_as_worker" {
-  service_account_id = google_service_account.batch_worker.name
-  role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${google_service_account.backend.email}"
-}
-
 # Allow CI to deploy new image revisions to Cloud Run
 resource "google_project_iam_member" "ci_run_developer" {
   project = var.project_id

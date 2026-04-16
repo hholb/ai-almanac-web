@@ -43,10 +43,16 @@ class Settings(BaseSettings):
     job_cpu_probabilistic: str = "8"
     job_memory_probabilistic: str = "32Gi"
 
-    # Cloud Batch settings — required when job_runner=batch
+    # Cloud Run / Batch settings — required when job_runner=cloudrun or batch
     gcp_project: str = ""
     gcp_region: str = "us-central1"
     batch_worker_sa: str = ""
+
+    # Modal settings — required when job_runner=modal
+    # MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are read directly by the Modal client
+    # from env; these fields just make them available for validation/logging.
+    modal_token_id: str = ""
+    modal_token_secret: str = ""
 
     # ---------------------------------------------------------------------------
     # Auth

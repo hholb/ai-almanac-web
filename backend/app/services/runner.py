@@ -300,6 +300,52 @@ class CloudRunJobRunner(JobRunner):
 
 
 # ---------------------------------------------------------------------------
+# Modal runner (production alternative to Cloud Run Jobs)
+# ---------------------------------------------------------------------------
+
+class ModalRunner(JobRunner):
+    def __init__(self, outputs_bucket: str, job_timeout_seconds: int):
+        self._outputs_bucket = outputs_bucket
+        self._timeout = job_timeout_seconds
+
+    def run_job(self, job_id: str, config: dict) -> None:
+        t = threading.Thread(target=self._submit_and_poll, args=(job_id, config), daemon=True)
+        t.start()
+
+    def _submit_and_poll(self, job_id: str, config: dict) -> None:
+        import time
+        import modal
+
+        try:
+            run_romp = modal.Function.from_name("almanac-romp", "run_romp")
+            handle = run_romp.spawn(job_id, config, self._outputs_bucket)
+            logger.info("Spawned Modal function for job %s", job_id)
+        except Exception as exc:
+            _update_status(job_id, "failed", error=f"Failed to spawn Modal function: {exc}")
+            logger.exception("Failed to spawn Modal job %s", job_id)
+            return
+
+        deadline = time.time() + self._timeout
+        while time.time() < deadline:
+            time.sleep(15)
+            try:
+                handle.get(timeout=0)
+                _update_status(job_id, "complete")
+                logger.info("Modal job %s completed", job_id)
+                return
+            except TimeoutError:
+                continue  # still running
+            except Exception as exc:
+                _update_status(job_id, "failed", error=str(exc))
+                logger.error("Modal job %s failed: %s", job_id, exc)
+                return
+
+        handle.cancel()
+        _update_status(job_id, "failed", error="Job exceeded timeout")
+        logger.error("Modal job %s timed out", job_id)
+
+
+# ---------------------------------------------------------------------------
 # Shared status helper
 # ---------------------------------------------------------------------------
 
@@ -341,6 +387,11 @@ def _make_runner() -> JobRunner:
     from .storage import get_storage
 
     runner = settings.job_runner.lower()
+    if runner == "modal":
+        return ModalRunner(
+            outputs_bucket=settings.gcs_outputs_bucket,
+            job_timeout_seconds=settings.job_timeout_seconds,
+        )
     if runner in ("cloudrun", "batch"):
         image = settings.romp_wrapper_image or settings.romp_image
         return CloudRunJobRunner(

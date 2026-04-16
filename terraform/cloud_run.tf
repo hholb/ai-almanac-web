@@ -153,10 +153,24 @@ resource "google_cloud_run_v2_service" "backend" {
         }
       }
 
-      # Batch worker SA — passed to batch_runner.py when submitting jobs
+      # Modal credentials — used by ModalRunner to submit ROMP jobs
       env {
-        name  = "BATCH_WORKER_SA"
-        value = google_service_account.batch_worker.email
+        name = "MODAL_TOKEN_ID"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.modal_token_id.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "MODAL_TOKEN_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.modal_token_secret.secret_id
+            version = "latest"
+          }
+        }
       }
 
       # Frontend origin for CORS — set var.frontend_url after first deploy
@@ -231,6 +245,8 @@ resource "google_cloud_run_v2_service" "backend" {
     google_secret_manager_secret_iam_member.backend_reads_globus_id,
     google_secret_manager_secret_iam_member.backend_reads_globus_secret,
     google_secret_manager_secret_iam_member.backend_reads_db_password,
+    google_secret_manager_secret_iam_member.backend_reads_modal_token_id,
+    google_secret_manager_secret_iam_member.backend_reads_modal_token_secret,
   ]
 }
 

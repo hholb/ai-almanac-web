@@ -75,9 +75,9 @@ variable "job_output_retention_days" {
 # ---------------------------------------------------------------------------
 
 variable "job_runner" {
-  description = "Job runner backend: 'cloudrun' (production) or 'docker' (local dev)"
+  description = "Job runner backend: 'modal' (production) or 'docker' (local dev)"
   type        = string
-  default     = "cloudrun"
+  default     = "modal"
 }
 
 variable "demo_obs_datasets" {
