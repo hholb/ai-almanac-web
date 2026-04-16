@@ -69,6 +69,17 @@ class Settings(BaseSettings):
     modal_token_secret: str = ""
 
     # ---------------------------------------------------------------------------
+    # LLM — OpenAI-compatible client; point at any provider by changing these.
+    # Examples:
+    #   Anthropic:  llm_base_url="https://api.anthropic.com/v1", llm_model="claude-sonnet-4-6"
+    #   Modal vLLM: llm_base_url="https://xxx--almanac-llm.modal.run/v1", llm_model="Qwen/Qwen2.5-Coder-7B-Instruct"
+    #   Ollama:     llm_base_url="http://localhost:11434/v1", llm_model="qwen2.5-coder"
+    # ---------------------------------------------------------------------------
+    llm_base_url: str = ""
+    llm_model: str = "claude-sonnet-4-6"
+    llm_api_key: str = "placeholder"
+
+    # ---------------------------------------------------------------------------
     # Auth
     # ---------------------------------------------------------------------------
     frontend_url: str = "http://localhost:5173"

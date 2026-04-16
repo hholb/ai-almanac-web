@@ -349,3 +349,88 @@ export async function getJobGrid(
   const params = new URLSearchParams({ model, window, metric });
   return request<JobGridResponse>(`/jobs/${id}/grid?${params}`);
 }
+
+// ---- Chat --------------------------------------------------------------------
+
+export type ChatSession = {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+};
+
+export type ChatMessage = {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
+};
+
+export type ChatSessionDetail = ChatSession & { messages: ChatMessage[] };
+
+export type ChatEvent =
+  | { type: "text"; content: string }
+  | { type: "tool_call"; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; name: string; content: string }
+  | { type: "done" };
+
+export async function createChatSession(
+  jobIds: string[] = [],
+  title?: string
+): Promise<ChatSession> {
+  return request<ChatSession>("/chat/sessions", {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds, title }),
+  });
+}
+
+export async function getChatSessions(): Promise<ChatSession[]> {
+  return request<ChatSession[]>("/chat/sessions");
+}
+
+export async function getChatSession(id: string): Promise<ChatSessionDetail> {
+  return request<ChatSessionDetail>(`/chat/sessions/${id}`);
+}
+
+export async function deleteChatSession(id: string): Promise<void> {
+  await request<void>(`/chat/sessions/${id}`, { method: "DELETE" });
+}
+
+/**
+ * Send a message and return an async generator of ChatEvents parsed from SSE.
+ */
+export async function* sendChatMessage(
+  sessionId: string,
+  content: string
+): AsyncGenerator<ChatEvent> {
+  const res = await fetch(`${BASE_URL}/chat/sessions/${sessionId}/message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Chat message failed (${res.status}): ${body}`);
+  }
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop()!;
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          yield JSON.parse(line.slice(6)) as ChatEvent;
+        } catch {
+          // malformed chunk — skip
+        }
+      }
+    }
+  }
+}

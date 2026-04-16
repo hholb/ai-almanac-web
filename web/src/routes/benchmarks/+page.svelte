@@ -5,6 +5,7 @@
   import { isAuthenticated } from "$lib/auth-store";
   import { BenchmarkStore } from "$lib/benchmarks.svelte";
   import ResultsViewer from "$lib/components/ResultsViewer.svelte";
+  import ChatPanel from "$lib/components/ChatPanel.svelte";
   import JobLogs from "$lib/components/JobLogs.svelte";
   import { getDatasets, getRegions, type Dataset, type Region } from "$lib/api";
   import BenchmarkSidebar from "./BenchmarkSidebar.svelte";
@@ -112,7 +113,14 @@
       {/if}
 
       {#if completeJobs.length > 0}
-        <ResultsViewer jobs={completeJobs} />
+        <div class="results-with-chat">
+          <div class="results-main">
+            <ResultsViewer jobs={completeJobs} />
+          </div>
+          <div class="chat-sidebar">
+            <ChatPanel jobs={completeJobs} />
+          </div>
+        </div>
       {/if}
 
     {:else}
@@ -130,7 +138,7 @@
   .page-layout {
     display: flex;
     min-height: calc(100vh - 3.5rem);
-    max-width: 1400px;
+    max-width: 1800px;
     margin: 0 auto;
     padding: 2rem 1.75rem;
     gap: 1.5rem;
@@ -143,7 +151,26 @@
     background: var(--color-surface-raised);
     border: 1px solid var(--color-border);
     border-radius: 0.6rem;
-    padding: 2rem;
+    padding: 1.5rem;
+  }
+
+  .results-with-chat {
+    display: flex;
+    gap: 1.25rem;
+    align-items: flex-start;
+  }
+
+  .results-main {
+    flex: 3;
+    min-width: 0;
+    min-width: 520px;
+  }
+
+  .chat-sidebar {
+    flex: 2;
+    min-width: 380px;
+    position: sticky;
+    top: 1rem;
   }
 
   /* ---- Results header ---- */

@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import config, datasets, jobs, regions
+from .routers import chat, config, datasets, jobs, regions
 from .services.storage import get_storage
 
 logging.basicConfig(
@@ -48,6 +48,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(chat.router)
 app.include_router(config.router)
 app.include_router(datasets.router)
 app.include_router(jobs.router)
