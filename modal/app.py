@@ -68,6 +68,7 @@ def run_romp(job_id: str, config: dict, outputs_bucket: str) -> None:
     Raises on failure so the caller's poll loop can catch it.
     """
     from google.cloud import storage as gcs
+    from google.cloud.storage import transfer_manager
 
     # Write SA key so google-cloud-storage can authenticate.
     sa_json = os.environ["SERVICE_ACCOUNT_JSON"]
@@ -90,33 +91,49 @@ def run_romp(job_id: str, config: dict, outputs_bucket: str) -> None:
 
     client = gcs.Client()
 
-    # --- Stage obs (all files in prefix, same logic as entrypoint.sh) ---
+    # --- Stage obs (all files in prefix, downloaded in parallel) ---
     obs_uri = config["obs_dir"]  # gs://bucket/prefix
     print(f"==> Staging obs from {obs_uri}")
     bucket_name, _, prefix = obs_uri.removeprefix("gs://").partition("/")
     prefix = prefix.rstrip("/") + "/"
-    for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/"):
-        name = blob.name[len(prefix) :]
-        if not name or name.endswith("/"):
-            continue
-        blob.download_to_filename(str(local_obs / name))
-        print(f"  obs: {name}")
+    obs_bucket = client.bucket(bucket_name)
+    obs_names = [
+        blob.name[len(prefix):]
+        for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
+        if blob.name[len(prefix):] and not blob.name[len(prefix):].endswith("/")
+    ]
+    if obs_names:
+        results = transfer_manager.download_many_to_path(
+            obs_bucket, obs_names, str(local_obs), blob_name_prefix=prefix, worker_type="thread",
+        )
+        for name, result in zip(obs_names, results):
+            if isinstance(result, Exception):
+                print(f"  obs FAILED: {name}: {result}")
+            else:
+                print(f"  obs: {name}")
     print(f"    obs staged: {sum(1 for _ in local_obs.iterdir())} files")
 
-    # --- Stage model (year-by-year, same logic as entrypoint.sh) ---
+    # --- Stage model (list prefix once, filter by year range, download in parallel) ---
     model_uri = config["model_dir"]  # gs://bucket/prefix
     print(f"==> Staging model ({start_year}–{end_year}) from {model_uri}")
     bucket_name, _, prefix = model_uri.removeprefix("gs://").partition("/")
     prefix = prefix.rstrip("/") + "/"
+    year_names = {f"{year}.nc" for year in range(start_year, end_year + 1)}
     model_bucket = client.bucket(bucket_name)
-    for year in range(start_year, end_year + 1):
-        blob = model_bucket.blob(f"{prefix}{year}.nc")
-        dest = local_model / f"{year}.nc"
-        try:
-            blob.download_to_filename(str(dest))
-            print(f"  model: {year}.nc")
-        except Exception:
-            pass  # year not present
+    model_names = [
+        blob.name[len(prefix):]
+        for blob in client.list_blobs(bucket_name, prefix=prefix, delimiter="/")
+        if blob.name[len(prefix):] in year_names
+    ]
+    if model_names:
+        results = transfer_manager.download_many_to_path(
+            model_bucket, model_names, str(local_model), blob_name_prefix=prefix, worker_type="thread",
+        )
+        for name, result in zip(model_names, results):
+            if isinstance(result, Exception):
+                print(f"  model FAILED: {name}: {result}")
+            else:
+                print(f"  model: {name}")
     print(f"    model staged: {sum(1 for _ in local_model.iterdir())} files")
 
     # --- Build ROMP env (matches DockerRunner env construction) ---
@@ -146,15 +163,21 @@ def run_romp(job_id: str, config: dict, outputs_bucket: str) -> None:
     if result.returncode in (-11, 139) and not any(local_out.iterdir()):
         raise RuntimeError("ROMP segfaulted with no output")
 
-    # --- Upload outputs to GCS ---
+    # --- Upload outputs to GCS (parallel) ---
     print(f"==> Uploading outputs to gs://{outputs_bucket}/{job_id}/")
     out_bucket = client.bucket(outputs_bucket)
     for kind, local_dir in (("output", local_out), ("figure", local_fig)):
-        for f in local_dir.iterdir():
-            if f.is_file():
-                out_bucket.blob(f"{job_id}/{kind}/{f.name}").upload_from_filename(
-                    str(f)
-                )
-                print(f"  uploaded: {kind}/{f.name}")
+        files = [f.name for f in local_dir.iterdir() if f.is_file()]
+        if not files:
+            continue
+        results = transfer_manager.upload_many_from_filenames(
+            out_bucket, files, source_directory=str(local_dir),
+            blob_name_prefix=f"{job_id}/{kind}/", worker_type="thread",
+        )
+        for name, result in zip(files, results):
+            if isinstance(result, Exception):
+                print(f"  upload FAILED: {kind}/{name}: {result}")
+            else:
+                print(f"  uploaded: {kind}/{name}")
 
     print("==> Done.")
