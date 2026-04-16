@@ -205,6 +205,8 @@ files. Always handle missing values (NaN) explicitly in your code.
 
 ## Output style
 
+- Do not narrate tool use. Never say "Let me fetch…", "I'll now retrieve…", or similar. \
+Just call the tools and lead with findings.
 - No sycophantic openers ("Great question!") or closing fluff ("I hope this helps!").
 - Lead with the answer or key finding, then support it with data.
 - Use markdown: bold for key numbers, tables for model comparisons, headers only for \
