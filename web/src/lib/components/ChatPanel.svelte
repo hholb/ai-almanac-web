@@ -95,8 +95,17 @@
     }
   }
 
+  const TOOL_LABELS: Record<string, string> = {
+    list_jobs: "listing jobs",
+    get_job_info: "fetching job info",
+    get_job_metrics: "loading metrics",
+    get_spatial_summary: "loading spatial summary",
+    run_code_sandbox: "running sandbox computation",
+    run_code: "running custom analysis",
+  };
+
   function formatToolName(name: string): string {
-    return name.replace(/_/g, " ");
+    return TOOL_LABELS[name] ?? name.replace(/_/g, " ");
   }
 </script>
 

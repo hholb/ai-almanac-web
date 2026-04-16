@@ -181,3 +181,163 @@ def run_romp(job_id: str, config: dict, outputs_bucket: str) -> None:
                 print(f"  uploaded: {kind}/{name}")
 
     print("==> Done.")
+
+
+# ---------------------------------------------------------------------------
+# Sandboxed code execution
+# ---------------------------------------------------------------------------
+
+# Minimal image for sandboxed code: scientific Python stack only, no GCS credentials.
+_sandbox_image = (
+    modal.Image.debian_slim()
+    .pip_install("xarray", "numpy", "h5netcdf", "scipy", "pandas")
+)
+
+
+@app.function(
+    image=_sandbox_image,
+    cpu=1,
+    memory=2048,
+    timeout=120,
+)
+def run_code_sandbox(code: str) -> dict:
+    """
+    Run arbitrary Python code in an isolated sandbox with no network access.
+
+    `code` must define a function:
+        def compute() -> dict:
+            ...
+
+    Returns {"ok": true, "result": {...}} or {"ok": false, "error": "..."}.
+    Available libraries: xarray, numpy, scipy, pandas.
+    """
+    import json as _json
+
+    runner_script = f"""\
+import json
+
+{code}
+
+try:
+    result = compute()
+    if not isinstance(result, dict):
+        result = {{"value": result}}
+    print(json.dumps({{"ok": True, "result": result}}))
+except Exception as exc:
+    import traceback
+    print(json.dumps({{"ok": False, "error": str(exc), "traceback": traceback.format_exc()}}))
+"""
+
+    sb = modal.Sandbox.create(
+        "python", "-c", runner_script,
+        image=_sandbox_image,
+        timeout=90,
+        block_network=True,
+    )
+    sb.wait()
+    stdout = sb.stdout.read()
+    stderr = sb.stderr.read()
+
+    if not stdout.strip():
+        return {"ok": False, "error": stderr or "Sandbox produced no output"}
+
+    try:
+        return _json.loads(stdout.strip())
+    except _json.JSONDecodeError:
+        return {"ok": False, "error": f"Non-JSON output: {stdout[:500]}"}
+
+
+@app.function(
+    image=romp_image,  # needs GCS to stage files
+    cpu=2,
+    memory=8192,
+    timeout=300,
+    secrets=[gcp_secret],
+)
+def run_code(job_id: str, outputs_bucket: str, code: str) -> dict:
+    """
+    Download NC output files for job_id from GCS, then run LLM-generated code
+    in an isolated Modal Sandbox with no network access.
+
+    `code` must define a function:
+        def compute(nc_dir: str) -> dict:
+            ...
+
+    Returns {"ok": true, "result": {...}} or {"ok": false, "error": "..."}.
+    """
+    import json as _json
+
+    from google.cloud import storage as gcs
+    from google.cloud.storage import transfer_manager
+
+    # Authenticate
+    sa_json = os.environ["SERVICE_ACCOUNT_JSON"]
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(sa_json)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = f.name
+
+    # Download all NC files from gs://{outputs_bucket}/{job_id}/output/
+    client = gcs.Client()
+    bucket = client.bucket(outputs_bucket)
+    prefix = f"{job_id}/output/"
+    nc_names = [
+        blob.name[len(prefix):]
+        for blob in client.list_blobs(outputs_bucket, prefix=prefix)
+        if blob.name.endswith(".nc")
+    ]
+
+    local_nc = Path("/tmp/sandbox_nc")
+    local_nc.mkdir(parents=True, exist_ok=True)
+
+    if nc_names:
+        results = transfer_manager.download_many_to_path(
+            bucket, nc_names, str(local_nc), blob_name_prefix=prefix, worker_type="thread",
+        )
+        for name, result in zip(nc_names, results):
+            if isinstance(result, Exception):
+                return {"ok": False, "error": f"Failed to download {name}: {result}"}
+
+    if not nc_names:
+        return {"ok": False, "error": "No NC output files found for this job"}
+
+    # Build the script that will run inside the sandbox.
+    # NC files are mounted at /data inside the sandbox.
+    runner_script = f"""\
+import json, sys
+from pathlib import Path
+
+{code}
+
+try:
+    result = compute("/data")
+    if not isinstance(result, dict):
+        result = {{"value": result}}
+    print(json.dumps({{"ok": True, "result": result}}))
+except Exception as exc:
+    print(json.dumps({{"ok": False, "error": str(exc)}}))
+"""
+
+    # Use an ephemeral volume to share NC files with the sandbox.
+    with modal.Volume.ephemeral() as vol:
+        with vol.batch_upload() as uploader:
+            for nc_file in local_nc.iterdir():
+                uploader.put_file(str(nc_file), nc_file.name)
+
+        sb = modal.Sandbox.create(
+            "python", "-c", runner_script,
+            image=_sandbox_image,
+            volumes={"/data": vol},
+            timeout=120,
+            block_network=True,  # generated code cannot exfiltrate data
+        )
+        sb.wait()
+        stdout = sb.stdout.read()
+        stderr = sb.stderr.read()
+
+    if not stdout.strip():
+        return {"ok": False, "error": stderr or "Sandbox produced no output"}
+
+    try:
+        return _json.loads(stdout.strip())
+    except _json.JSONDecodeError:
+        return {"ok": False, "error": f"Non-JSON output: {stdout[:500]}"}

@@ -94,6 +94,82 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_code_sandbox",
+            "description": (
+                "Run arbitrary Python code in an isolated sandbox with no network access. "
+                "Use this for general computation — statistics, simulations, cross-tabulations — "
+                "when you don't need job NC files. "
+                "You must define a function `def compute() -> dict` that returns a JSON-serialisable dict. "
+                "Available libraries: xarray, numpy, scipy, pandas."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": (
+                            "Python source defining `def compute() -> dict`. "
+                            "Must be self-contained. Example:\n"
+                            "```python\n"
+                            "import numpy as np\n\n"
+                            "def compute() -> dict:\n"
+                            "    return {'mean': float(np.mean([1, 2, 3]))}\n"
+                            "```"
+                        ),
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_code",
+            "description": (
+                "Execute custom Python analysis code against the NC output files for a job. "
+                "Use this when the built-in metrics don't answer the question — e.g. to compute "
+                "a custom metric, build a histogram, or cross-tabulate results. "
+                "The code runs in an isolated sandbox with no network access. "
+                "You must define a function `def compute(nc_dir: str) -> dict` that opens the "
+                "NC files in `nc_dir` using xarray/numpy and returns a JSON-serialisable dict. "
+                "Available libraries: xarray, numpy, scipy, pandas, h5netcdf. "
+                "Returns the dict your function returns, or an error message."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "The job UUID"},
+                    "code": {
+                        "type": "string",
+                        "description": (
+                            "Python source defining `def compute(nc_dir: str) -> dict`. "
+                            "Must be self-contained (no imports outside the stdlib + xarray/numpy/scipy/pandas). "
+                            "Example:\n"
+                            "```python\n"
+                            "import xarray as xr\n"
+                            "import numpy as np\n"
+                            "from pathlib import Path\n\n"
+                            "def compute(nc_dir: str) -> dict:\n"
+                            "    files = list(Path(nc_dir).glob('*.nc'))\n"
+                            "    results = {}\n"
+                            "    for f in files:\n"
+                            "        ds = xr.open_dataset(f)\n"
+                            "        if 'mean_mae' in ds:\n"
+                            "            results[f.stem] = float(ds['mean_mae'].mean())\n"
+                            "        ds.close()\n"
+                            "    return results\n"
+                            "```"
+                        ),
+                    },
+                },
+                "required": ["job_id", "code"],
+            },
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """You are an expert in AI weather prediction and monsoon onset forecasting, \
@@ -122,6 +198,10 @@ into the response unprompted.
 - Think before fetching: identify what data is required, then make targeted tool calls.
 - If a question is ambiguous, ask one clarifying question rather than guessing.
 - State uncertainty clearly. Do not overinterpret noisy or sparse metrics.
+- Use `run_code` when the built-in metrics don't answer the question — e.g. computing a custom \
+statistic, comparing distributions, or cross-tabulating results across windows. The sandbox has \
+xarray, numpy, scipy, and pandas. The NC files in `nc_dir` are the spatial_metrics_*.nc output \
+files. Always handle missing values (NaN) explicitly in your code.
 
 ## Output style
 
@@ -359,12 +439,72 @@ async def _exec_get_spatial_summary(args: dict, user_id: str) -> str:
     return json.dumps(result)
 
 
+async def _exec_run_code_sandbox(args: dict, user_id: str) -> str:
+    import asyncio
+
+    code = args["code"]
+
+    def _run():
+        import modal
+        fn = modal.Function.from_name("almanac-romp", "run_code_sandbox")
+        return fn.remote(code)
+
+    try:
+        result = await asyncio.to_thread(_run)
+        return json.dumps(result)
+    except Exception as exc:
+        logger.exception("run_code_sandbox failed")
+        return json.dumps({"error": str(exc)})
+
+
+async def _exec_run_code(args: dict, user_id: str) -> str:
+    import asyncio
+    from ..database import get_db
+    from ..services.storage import get_storage
+    from sqlalchemy import text
+
+    job_id = args["job_id"]
+    code = args["code"]
+
+    def _check():
+        with get_db() as conn:
+            row = conn.execute(
+                text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user_id},
+            ).mappings().fetchone()
+            return dict(row) if row else None
+
+    row = await asyncio.to_thread(_check)
+    if not row:
+        return json.dumps({"error": f"Job {job_id} not found"})
+    if row["status"] != "complete":
+        return json.dumps({"error": f"Job {job_id} is not complete"})
+
+    storage = get_storage()
+    if storage.is_local:
+        return json.dumps({"error": "run_code requires GCS storage — not available in local dev mode"})
+
+    def _run():
+        import modal
+        fn = modal.Function.from_name("almanac-romp", "run_code")
+        return fn.remote(job_id, storage._outputs_bucket, code)
+
+    try:
+        result = await asyncio.to_thread(_run)
+        return json.dumps(result)
+    except Exception as exc:
+        logger.exception("run_code sandbox failed")
+        return json.dumps({"error": str(exc)})
+
+
 # Registry — add new tools here without touching the streaming logic.
 _EXECUTORS: dict[str, callable] = {
     "list_jobs": _exec_list_jobs,
     "get_job_info": _exec_get_job_info,
     "get_job_metrics": _exec_get_job_metrics,
     "get_spatial_summary": _exec_get_spatial_summary,
+    "run_code_sandbox": _exec_run_code_sandbox,
+    "run_code": _exec_run_code,
 }
 
 
