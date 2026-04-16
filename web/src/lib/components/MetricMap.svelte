@@ -35,7 +35,7 @@
   let mapContainer = $state<HTMLElement | null>(null);
   let map = $state<Map | null>(null);
 
-  // ColorBrewer sequential scales: [metric][colorIndex] low→high
+  // ColorBrewer sequential scales for climatology raw values: [metric][colorIndex] low→high
   const COLOR_SCALES: Record<string, string[][]> = {
     false_alarm_rate: [
       ["#ffffb2", "#fecc5c", "#fd8d3c", "#f03b20", "#bd0026"], // YlOrRd
@@ -58,13 +58,24 @@
   };
   const FALLBACK_SCALE = ["#f7f7f7", "#cccccc", "#969696", "#525252", "#252525"];
 
+  // Diverging scale for anomaly (model − climatology): blue → white → red
+  // Blue = model better than baseline, red = model worse
+  const DIVERGING_STOPS = ["#2166ac", "#92c5de", "#f7f7f7", "#f4a582", "#b2182b"];
+
   function getStops(metricValue: string, colorIndex: number): string[] {
     const scales = COLOR_SCALES[metricValue];
     if (!scales) return FALLBACK_SCALE;
     return scales[colorIndex % scales.length];
   }
 
-  type LayerState = { layer: VectorLayer; data: JobGridResponse; stops: string[] };
+  type LayerState = {
+    layer: VectorLayer;
+    data: JobGridResponse;
+    stops: string[];
+    // For delta layers: the symmetric ±maxAbs range used for coloring
+    isDelta: boolean;
+    deltaMaxAbs?: number;
+  };
   let layers    = $state<Record<string, LayerState>>({});
   let loading   = $state<Set<string>>(new Set());
   let errors    = $state<Record<string, string>>({});
@@ -132,7 +143,8 @@
 
   // ---- Layer building ----------------------------------------------------------
 
-  function buildLayer(data: JobGridResponse, stops: string[]): VectorLayer {
+  // Build a layer colored by raw values (used for climatology).
+  function buildRawLayer(data: JobGridResponse, stops: string[]): VectorLayer {
     const { lats, lons, values, min, max } = data;
     const range = max - min || 1;
     const features: Feature[] = [];
@@ -167,6 +179,70 @@
     return new VectorLayer({ source: new VectorSource({ features }), visible: false, zIndex: 10 });
   }
 
+  // Build a layer colored by (model − climatology) delta using a diverging scale.
+  // Returns the layer and the symmetric maxAbs used for the scale.
+  function buildDeltaLayer(
+    data: JobGridResponse,
+    climData: JobGridResponse,
+  ): { layer: VectorLayer; maxAbs: number } {
+    const { lats, lons, values } = data;
+    const features: Feature[] = [];
+    const dlat = lats.length > 1 ? Math.abs(lats[1] - lats[0]) / 2 : 0.5;
+    const dlon = lons.length > 1 ? Math.abs(lons[1] - lons[0]) / 2 : 0.5;
+
+    // First pass: collect deltas to find symmetric range
+    const deltas: (number | null)[][] = lats.map((_, i) =>
+      lons.map((__, j) => {
+        const modelVal = values[i]?.[j];
+        const climVal = climData.values[i]?.[j];
+        if (modelVal == null || climVal == null) return null;
+        return modelVal - climVal;
+      })
+    );
+    let maxAbs = 0;
+    for (const row of deltas) {
+      for (const d of row) {
+        if (d != null) maxAbs = Math.max(maxAbs, Math.abs(d));
+      }
+    }
+    if (maxAbs === 0) maxAbs = 1;
+
+    for (let i = 0; i < lats.length; i++) {
+      for (let j = 0; j < lons.length; j++) {
+        const delta = deltas[i]?.[j];
+        if (delta == null) continue;
+        const modelVal = values[i]?.[j] as number;
+        const lat = lats[i], lon = lons[j];
+        // Map [-maxAbs, maxAbs] → [0, 1]
+        const t = (delta + maxAbs) / (2 * maxAbs);
+        const color = interpolateStops(DIVERGING_STOPS, t);
+        const coords = [
+          fromLonLat([lon - dlon, lat - dlat]),
+          fromLonLat([lon + dlon, lat - dlat]),
+          fromLonLat([lon + dlon, lat + dlat]),
+          fromLonLat([lon - dlon, lat + dlat]),
+          fromLonLat([lon - dlon, lat - dlat]),
+        ];
+        const feature = new Feature({ geometry: new Polygon([coords]) });
+        feature.set(
+          "displayVal",
+          `${data.metric}: ${modelVal.toFixed(3)} (Δ vs clim: ${delta >= 0 ? "+" : ""}${delta.toFixed(3)})`,
+        );
+        feature.set("lat", lat);
+        feature.set("lon", lon);
+        feature.setStyle(new Style({
+          fill: new Fill({ color }),
+          stroke: new Stroke({ color: "rgba(255,255,255,0.3)", width: 0.5 }),
+        }));
+        features.push(feature);
+      }
+    }
+    return {
+      layer: new VectorLayer({ source: new VectorSource({ features }), visible: false, zIndex: 10 }),
+      maxAbs,
+    };
+  }
+
   // ---- Layer management --------------------------------------------------------
 
   function fitToLayer(layer: VectorLayer) {
@@ -174,28 +250,15 @@
     if (map && extent) map.getView().fit(extent, { padding: [20, 20, 20, 20], duration: 300 });
   }
 
-  async function loadLayer(run: RunDef, metricValue: string) {
+  function addLayerState(key: string, state: LayerState) {
     if (!map) return;
-    const key = layerKey(run.jobId, run.modelName, metricValue);
-    const stops = getStops(metricValue, run.colorIndex);
-    loading = new Set([...loading, key]);
-    try {
-      const data = await getCachedJobGrid(run.jobId, run.modelName, forecastWindow, metricValue);
-      const layer = buildLayer(data, stops);
-      map.addLayer(layer);
-      if (layers[key]) map.removeLayer(layers[key].layer);
-      layers = { ...layers, [key]: { layer, data, stops } };
-      if (visibleKeys.has(key)) {
-        layer.setVisible(true);
-        layer.setOpacity(opacities[key] ?? 1);
-        if (visibleKeys.size === 1) fitToLayer(layer);
-      }
-    } catch (e) {
-      errors = { ...errors, [key]: e instanceof Error ? e.message : "Failed to load" };
-    } finally {
-      const next = new Set(loading);
-      next.delete(key);
-      loading = next;
+    if (layers[key]) map.removeLayer(layers[key].layer);
+    map.addLayer(state.layer);
+    layers = { ...layers, [key]: state };
+    if (visibleKeys.has(key)) {
+      state.layer.setVisible(true);
+      state.layer.setOpacity(opacities[key] ?? 1);
+      if (visibleKeys.size === 1) fitToLayer(state.layer);
     }
   }
 
@@ -252,7 +315,61 @@
     visibleKeys = new Set([firstKey]);
     opacities = { [firstKey]: 1 };
 
-    await Promise.all(activeRuns.flatMap((run) => metrics.map((m) => loadLayer(run, m.value))));
+    // Mark all keys as loading
+    const allKeys = activeRuns.flatMap((run) => metrics.map((m) => layerKey(run.jobId, run.modelName, m.value)));
+    loading = new Set(allKeys);
+
+    // Fetch all grid data concurrently
+    type FetchResult = { run: RunDef; metricValue: string; data: JobGridResponse } | { run: RunDef; metricValue: string; error: string };
+    const results: FetchResult[] = await Promise.all(
+      activeRuns.flatMap((run) =>
+        metrics.map(async (m) => {
+          try {
+            const data = await getCachedJobGrid(run.jobId, run.modelName, forecastWindow, m.value);
+            return { run, metricValue: m.value, data };
+          } catch (e) {
+            return { run, metricValue: m.value, error: e instanceof Error ? e.message : "Failed to load" };
+          }
+        })
+      )
+    );
+
+    // Index climatology data by metric for delta computation
+    const climByMetric: Record<string, JobGridResponse> = {};
+    for (const r of results) {
+      if ("data" in r && r.run.modelName === "climatology") {
+        climByMetric[r.metricValue] = r.data;
+      }
+    }
+
+    // Build and register layers
+    const newErrors: Record<string, string> = {};
+    for (const r of results) {
+      const key = layerKey(r.run.jobId, r.run.modelName, r.metricValue);
+      if ("error" in r) {
+        newErrors[key] = r.error;
+      } else {
+        const { run, metricValue, data } = r;
+        if (run.modelName === "climatology") {
+          const stops = getStops(metricValue, run.colorIndex);
+          const layer = buildRawLayer(data, stops);
+          addLayerState(key, { layer, data, stops, isDelta: false });
+        } else {
+          const climData = climByMetric[metricValue];
+          if (climData) {
+            const { layer, maxAbs } = buildDeltaLayer(data, climData);
+            addLayerState(key, { layer, data, stops: DIVERGING_STOPS, isDelta: true, deltaMaxAbs: maxAbs });
+          } else {
+            // Fallback to raw if clim unavailable
+            const stops = getStops(metricValue, run.colorIndex);
+            const layer = buildRawLayer(data, stops);
+            addLayerState(key, { layer, data, stops, isDelta: false });
+          }
+        }
+      }
+    }
+    errors = newErrors;
+    loading = new Set();
 
     if (layers[firstKey]) fitToLayer(layers[firstKey].layer);
   }
@@ -388,13 +505,26 @@
         {@const gradient = `linear-gradient(to right, ${vl.stops.join(", ")})`}
         {@const displayName = vModel === "climatology" ? "Climatology" : vModel.toUpperCase()}
         {#if i > 0}<div class="legend-divider"></div>{/if}
-        <div class="legend-title">{displayName} — {metricLabel(vMetric)}</div>
-        <div class="scale-bar" style="background: {gradient}"></div>
-        <div class="scale-labels">
-          <span>{vl.data.min.toFixed(2)}</span>
-          <span class="scale-unit">({vl.data.unit})</span>
-          <span>{vl.data.max.toFixed(2)}</span>
+        <div class="legend-title">
+          {displayName} — {metricLabel(vMetric)}
+          {#if vl.isDelta}<span class="legend-delta-badge">Δ vs clim</span>{/if}
         </div>
+        <div class="scale-bar" style="background: {gradient}"></div>
+        {#if vl.isDelta && vl.deltaMaxAbs != null}
+          <div class="scale-labels">
+            <span>−{vl.deltaMaxAbs.toFixed(3)}</span>
+            <span class="scale-unit">(better)</span>
+            <span>0</span>
+            <span class="scale-unit">(worse)</span>
+            <span>+{vl.deltaMaxAbs.toFixed(3)}</span>
+          </div>
+        {:else}
+          <div class="scale-labels">
+            <span>{vl.data.min.toFixed(2)}</span>
+            <span class="scale-unit">({vl.data.unit})</span>
+            <span>{vl.data.max.toFixed(2)}</span>
+          </div>
+        {/if}
       {/each}
     </div>
   {/if}
@@ -692,6 +822,21 @@
     text-align: center;
   }
   .legend-divider { height: 1px; background: #e5e5e5; margin: 0.4rem 0; }
+
+  .legend-delta-badge {
+    display: inline-block;
+    font-size: 0.5rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #555;
+    background: #eee;
+    border: 1px solid #ccc;
+    padding: 0.05rem 0.3rem;
+    border-radius: 0.2rem;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+  }
   .scale-bar { height: 10px; border-radius: 2px; margin-bottom: 0.2rem; }
   .scale-labels {
     display: flex;
