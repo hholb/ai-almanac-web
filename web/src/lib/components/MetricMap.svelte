@@ -72,9 +72,9 @@
     layer: VectorLayer;
     data: JobGridResponse;
     stops: string[];
-    // For delta layers: the symmetric ±maxAbs range used for coloring
     isDelta: boolean;
     deltaMaxAbs?: number;
+    climData?: JobGridResponse; // present on delta layers for tooltip computation
   };
   let layers    = $state<Record<string, LayerState>>({});
   let loading   = $state<Set<string>>(new Set());
@@ -113,6 +113,54 @@
 
   function metricLabel(metricValue: string) {
     return metrics.find((m) => m.value === metricValue)?.label ?? metricValue;
+  }
+
+  // Find the value in a grid at the lat/lon closest to the given coordinates.
+  function getValueAtLatLon(data: JobGridResponse, lat: number, lon: number): number | null {
+    let bestI = 0, bestJ = 0, bestDist = Infinity;
+    for (let i = 0; i < data.lats.length; i++) {
+      for (let j = 0; j < data.lons.length; j++) {
+        const d = Math.abs(data.lats[i] - lat) + Math.abs(data.lons[j] - lon);
+        if (d < bestDist) { bestDist = d; bestI = i; bestJ = j; }
+      }
+    }
+    return data.values[bestI]?.[bestJ] ?? null;
+  }
+
+  function buildTooltipContent(lat: number, lon: number): string {
+    const header = `<strong>${lat.toFixed(2)}°N ${lon.toFixed(2)}°E</strong>`;
+    if (visibleKeys.size === 0) return header;
+
+    // Group visible layer keys by model name, preserving insertion order
+    const byModelOrder: string[] = [];
+    const byModel: Record<string, string[]> = {};
+    for (const key of visibleKeys) {
+      if (!layers[key]) continue;
+      const { modelName } = parseKey(key);
+      if (!byModel[modelName]) { byModel[modelName] = []; byModelOrder.push(modelName); }
+      byModel[modelName].push(key);
+    }
+
+    const sections: string[] = [header];
+    for (const modelName of byModelOrder) {
+      const keys = byModel[modelName];
+      const displayName = modelName === "climatology" ? "Climatology" : modelName.toUpperCase();
+      const rows = keys.map((key) => {
+        const ls = layers[key];
+        const { metric } = parseKey(key);
+        const val = getValueAtLatLon(ls.data, lat, lon);
+        if (val == null) return `<span class="tt-metric">${metricLabel(metric)}: —</span>`;
+        if (ls.isDelta && ls.climData) {
+          const climVal = getValueAtLatLon(ls.climData, lat, lon);
+          const delta = climVal != null ? val - climVal : null;
+          const deltaStr = delta != null ? ` <span class="tt-delta">(Δ${delta >= 0 ? "+" : ""}${delta.toFixed(3)})</span>` : "";
+          return `<span class="tt-metric">${metricLabel(metric)}: ${val.toFixed(3)}${deltaStr}</span>`;
+        }
+        return `<span class="tt-metric">${metricLabel(metric)}: ${val.toFixed(3)}</span>`;
+      });
+      sections.push(`<div class="tt-group"><span class="tt-model">${displayName}</span>${rows.join("")}</div>`);
+    }
+    return sections.join("");
   }
 
   // ---- Color helpers -----------------------------------------------------------
@@ -358,7 +406,7 @@
           const climData = climByMetric[metricValue];
           if (climData) {
             const { layer, maxAbs } = buildDeltaLayer(data, climData);
-            addLayerState(key, { layer, data, stops: DIVERGING_STOPS, isDelta: true, deltaMaxAbs: maxAbs });
+            addLayerState(key, { layer, data, stops: DIVERGING_STOPS, isDelta: true, deltaMaxAbs: maxAbs, climData });
           } else {
             // Fallback to raw if clim unavailable
             const stops = getStops(metricValue, run.colorIndex);
@@ -387,11 +435,10 @@
     map.on("pointermove", (e) => {
       if (!map || e.dragging) { tooltipVisible = false; return; }
       const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f);
-      if (feature && feature.get("displayVal")) {
-        tooltipContent =
-          `${feature.get("displayVal")}` +
-          `<br>${Number(feature.get("lat")).toFixed(2)}°N` +
-          ` ${Number(feature.get("lon")).toFixed(2)}°E`;
+      if (feature && feature.get("lat") != null) {
+        const lat = Number(feature.get("lat"));
+        const lon = Number(feature.get("lon"));
+        tooltipContent = buildTooltipContent(lat, lon);
         tooltipX = e.pixel[0] + 14;
         tooltipY = e.pixel[1] - 10;
         tooltipVisible = true;
@@ -794,6 +841,36 @@
     box-shadow: 0 2px 6px rgba(0,0,0,0.12);
     pointer-events: none;
     line-height: 1.5;
+    min-width: 160px;
+  }
+
+  .tooltip :global(.tt-group) {
+    margin-top: 0.35rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .tooltip :global(.tt-model) {
+    display: block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #777;
+    margin-bottom: 0.1rem;
+  }
+
+  .tooltip :global(.tt-metric) {
+    display: block;
+    font-size: 0.73rem;
+    color: #222;
+    font-family: var(--font-mono);
+  }
+
+  .tooltip :global(.tt-delta) {
+    font-size: 0.68rem;
+    color: #777;
   }
 
   /* ---- Legend ---- */
