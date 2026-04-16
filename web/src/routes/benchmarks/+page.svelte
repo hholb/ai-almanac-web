@@ -53,7 +53,7 @@
   let form = $state({
     datasetId: "",
     maxForecastDay: null as number | null,
-    parallel: false,
+    parallel: true,
     // Advanced — obs overrides
     obs: "",
     obsFilePattern: "",
@@ -184,7 +184,7 @@
         start_year_clim: clampYear(cfg.start_year_clim),
         end_year_clim:   clampYear(cfg.end_year_clim),
         init_days:       cfg.init_days,
-        parallel:        false,
+        parallel:        true,
         probabilistic:   cfg.probabilistic,
         members:         cfg.members ?? "",
         model_var:       cfg.model_var !== "tp" ? cfg.model_var : "",
@@ -582,10 +582,10 @@
                   <label class="checkbox-label">
                     <input
                       type="checkbox"
-                      checked={getOverride(modelId, "parallel", false)}
+                      checked={getOverride(modelId, "parallel", true)}
                       onchange={(e) => setOverride(modelId, "parallel", (e.target as HTMLInputElement).checked)}
                     />
-                    <span class="label-text">Parallel <span class="tip" data-tip="Run years concurrently. Off by default — enabling this may cause jobs to exceed the 16 GiB memory limit and fail.">ⓘ</span></span>
+                    <span class="label-text">Parallel <span class="tip" data-tip="Run years concurrently for faster results.">ⓘ</span></span>
                   </label>
                   <label class="checkbox-label">
                     <input
