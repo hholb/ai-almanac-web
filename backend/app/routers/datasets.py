@@ -109,10 +109,6 @@ async def confirm_upload(dataset_id: str, user: CurrentUser):
                 return None, "upload_not_found"
 
             now = datetime.now(timezone.utc).isoformat()
-            conn.execute(
-                text("UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id"),
-                {"now": now, "id": dataset_id},
-            )
             result = conn.execute(
                 text("UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id RETURNING *"),
                 {"now": now, "id": dataset_id},

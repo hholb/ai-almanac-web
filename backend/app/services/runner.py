@@ -245,37 +245,14 @@ class CloudRunJobRunner(JobRunner):
                 pass
 
     def _fetch_execution_error(self, execution_name: str) -> str:
-        try:
-            from google.cloud import logging as gcloud_logging
-            client = gcloud_logging.Client()
-            # execution_name is like projects/P/locations/R/jobs/J/executions/E
-            execution_id = execution_name.split("/")[-1]
-            entries = client.list_entries(
-                filter_=(
-                    f'resource.type="cloud_run_job" '
-                    f'AND labels."run.googleapis.com/execution_name"=~"{execution_id}"'
-                ),
-                order_by=gcloud_logging.DESCENDING,
-                page_size=30,
-            )
-            lines = []
-            for entry in entries:
-                payload = entry.payload
-                if isinstance(payload, str):
-                    line = payload.strip()
-                elif isinstance(payload, dict):
-                    line = str(payload.get("message", payload)).strip()
-                else:
-                    continue
-                if line:
-                    lines.append(line)
-                if len(lines) >= 20:
-                    break
-            if lines:
-                return "\n".join(reversed(lines))
-        except Exception as exc:
-            logger.warning("Could not fetch execution logs for %s: %s", execution_name, exc)
-        return "Cloud Run Job task failed — check Cloud Logging"
+        from .logging import fetch_cloud_logs
+        execution_id = execution_name.split("/")[-1]
+        filter_expr = (
+            f'resource.type="cloud_run_job" '
+            f'AND labels."run.googleapis.com/execution_name"=~"{execution_id}"'
+        )
+        result = fetch_cloud_logs(filter_expr, max_entries=20, descending=True)
+        return result if result != "(no logs found)" else "Cloud Run Job task failed — check Cloud Logging"
 
     def _poll(self, job_id: str, execution_name: str) -> None:
         import time

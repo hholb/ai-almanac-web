@@ -15,38 +15,14 @@ from ..config import settings, get_model_registry, get_demo_datasets
 from ..database import get_db
 from ..services.runner import get_runner
 from ..services.storage import get_storage
+from ..services.logging import fetch_cloud_logs
+from ..services.metrics import (
+    compute_job_metrics, compute_job_grid,
+    JobMetrics, JobGridResponse,
+    MetricStats, WindowMetrics, GridInfo,
+)
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
-
-
-def _fetch_cloud_logs(job_id: str, max_entries: int = 200) -> str:
-    """Fetch container stdout/stderr from Cloud Logging for a Cloud Run Job task."""
-    try:
-        from google.cloud import logging as gcloud_logging
-        client = gcloud_logging.Client()
-        job_prefix = job_id.replace("_", "-")[:36]
-        entries = client.list_entries(
-            filter_=(
-                f'resource.type="cloud_run_job" '
-                f'AND labels."run.googleapis.com/execution_name"=~"romp-{job_prefix}"'
-            ),
-            order_by=gcloud_logging.ASCENDING,
-            page_size=max_entries,
-        )
-        lines = []
-        for entry in entries:
-            payload = entry.payload
-            if isinstance(payload, str):
-                text_line = payload.strip()
-            elif isinstance(payload, dict):
-                text_line = str(payload.get("message", payload)).strip()
-            else:
-                continue
-            if text_line:
-                lines.append(text_line)
-        return "\n".join(lines) if lines else "(no logs found)"
-    except Exception as exc:
-        return f"Could not fetch logs: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -108,49 +84,6 @@ class ResultFile(BaseModel):
     name: str
     type: str   # "output" | "figure"
     url: str
-
-
-class MetricStats(BaseModel):
-    mean: float
-    min: float
-    max: float
-    p25: float
-    p50: float
-    p75: float
-    p90: float
-    unit: str
-
-
-class WindowMetrics(BaseModel):
-    window: str
-    model: str
-    tolerance_days: int | None
-    metrics: dict[str, MetricStats]
-
-
-class GridInfo(BaseModel):
-    lats: list[float]
-    lons: list[float]
-
-
-class JobMetrics(BaseModel):
-    job_id: str
-    windows: list[WindowMetrics]
-    grid: GridInfo | None = None
-    bbox: dict | None = None
-
-
-class JobGridResponse(BaseModel):
-    job_id: str
-    model: str
-    window: str
-    metric: str
-    lats: list[float]
-    lons: list[float]
-    values: list[list[float | None]]
-    unit: str
-    min: float
-    max: float
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +263,12 @@ async def get_logs(job_id: str, user: CurrentUser) -> dict:
     if storage.is_local:
         logs = await asyncio.to_thread(storage.read_log, job_id)
     else:
-        logs = await asyncio.to_thread(_fetch_cloud_logs, job_id)
+        job_prefix = job_id.replace("_", "-")[:36]
+        filter_expr = (
+            f'resource.type="cloud_run_job" '
+            f'AND labels."run.googleapis.com/execution_name"=~"romp-{job_prefix}"'
+        )
+        logs = await asyncio.to_thread(fetch_cloud_logs, filter_expr)
     return {"logs": logs}
 
 
@@ -419,112 +357,13 @@ async def get_metrics(
     if row["status"] != "complete":
         raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
 
-    bbox = (lat_min, lat_max, lon_min, lon_max)
-    has_bbox = any(v is not None for v in bbox)
-
-    def _compute():
-        try:
-            import numpy as np
-            import xarray as xr
-        except ImportError:
-            raise HTTPException(status_code=503, detail="xarray not available on this server")
-
-        storage = get_storage()
-
-        # For GCS, we need to open the files via fsspec. For local, use the path directly.
-        if storage.is_local:
-            from ..services.storage import LocalStorage
-            output_dir = storage._outputs_dir / job_id / "output"
-            nc_files = sorted(output_dir.glob("spatial_metrics_*.nc")) if output_dir.exists() else []
-        else:
-            import gcsfs
-            fs = gcsfs.GCSFileSystem()
-            prefix = f"{storage._outputs_bucket}/{job_id}/output/spatial_metrics_"
-            nc_files = sorted(fs.glob(f"{prefix}*.nc"))
-            nc_files = [f"gs://{f}" for f in nc_files]
-
-        UNIT_MAP = {"false_alarm_rate": "fraction", "miss_rate": "fraction"}
-        windows = []
-        grid_info: GridInfo | None = None
-        actual_bbox: dict | None = None
-
-        def _open_nc(path):
-            if storage.is_local:
-                return xr.open_dataset(path)
-            with fs.open(path.removeprefix("gs://"), "rb") as f:
-                return xr.load_dataset(f, engine="h5netcdf")
-
-        for nc_file in nc_files:
-            ds = _open_nc(nc_file)
-
-            if grid_info is None and "lat" in ds.coords and "lon" in ds.coords:
-                grid_info = GridInfo(
-                    lats=[float(v) for v in sorted(ds.lat.values)],
-                    lons=[float(v) for v in sorted(ds.lon.values)],
-                )
-
-            if has_bbox:
-                lats = ds.lat.values
-                lons = ds.lon.values
-                if lat_min is not None: lats = lats[lats >= lat_min]
-                if lat_max is not None: lats = lats[lats <= lat_max]
-                if lon_min is not None: lons = lons[lons >= lon_min]
-                if lon_max is not None: lons = lons[lons <= lon_max]
-                ds = ds.sel(lat=lats, lon=lons)
-
-            if actual_bbox is None and "lat" in ds.coords and "lon" in ds.coords:
-                lats = ds.lat.values
-                lons = ds.lon.values
-                if len(lats) and len(lons):
-                    actual_bbox = {
-                        "lat_min": float(lats.min()), "lat_max": float(lats.max()),
-                        "lon_min": float(lons.min()), "lon_max": float(lons.max()),
-                    }
-
-            model = str(ds.attrs.get("model", ""))
-            window_label = str(ds.attrs.get("verification_window", "")).replace(",", "-")
-            tolerance_days = int(ds.attrs["tolerance_days"]) if "tolerance_days" in ds.attrs else None
-
-            metrics: dict[str, MetricStats] = {}
-            for var in ds.data_vars:
-                arr = ds[var].values.astype(float)
-                valid = arr[~np.isnan(arr)]
-                if len(valid) == 0:
-                    continue
-                var_str = str(var)
-                unit = UNIT_MAP.get(var_str, "days")
-                metrics[var_str] = MetricStats(
-                    mean=float(np.mean(valid)),
-                    min=float(np.min(valid)),
-                    max=float(np.max(valid)),
-                    p25=float(np.percentile(valid, 25)),
-                    p50=float(np.percentile(valid, 50)),
-                    p75=float(np.percentile(valid, 75)),
-                    p90=float(np.percentile(valid, 90)),
-                    unit=unit,
-                )
-            ds.close()
-            windows.append(WindowMetrics(
-                window=window_label,
-                model=model,
-                tolerance_days=tolerance_days,
-                metrics=metrics,
-            ))
-
-        windows.sort(key=lambda w: (w.model == "climatology", w.window))
-        return JobMetrics(job_id=job_id, windows=windows, grid=grid_info, bbox=actual_bbox)
-
-    return await asyncio.to_thread(_compute)
+    return await asyncio.to_thread(
+        compute_job_metrics, job_id, get_storage(), lat_min, lat_max, lon_min, lon_max
+    )
 
 
 @router.get("/{job_id}/grid", response_model=JobGridResponse)
-async def get_grid(
-    job_id: str,
-    user: CurrentUser,
-    model: str,
-    window: str,
-    metric: str,
-):
+async def get_grid(job_id: str, user: CurrentUser, model: str, window: str, metric: str):
     def _check():
         with get_db() as conn:
             row = conn.execute(
@@ -539,70 +378,7 @@ async def get_grid(
     if row["status"] != "complete":
         raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
 
-    def _load():
-        try:
-            import numpy as np
-            import xarray as xr
-        except ImportError:
-            raise HTTPException(status_code=503, detail="xarray not available")
-
-        storage = get_storage()
-        w_alt = window.replace("-", ",")
-
-        if storage.is_local:
-            output_dir = storage._outputs_dir / job_id / "output"
-            matches = list(output_dir.glob(f"spatial_metrics_{model}_{window}.nc"))
-            if not matches:
-                matches = list(output_dir.glob(f"spatial_metrics_{model}_{w_alt}.nc"))
-        else:
-            import gcsfs
-            fs = gcsfs.GCSFileSystem()
-            base = f"{storage._outputs_bucket}/{job_id}/output"
-            matches = fs.glob(f"{base}/spatial_metrics_{model}_{window}.nc")
-            if not matches:
-                matches = fs.glob(f"{base}/spatial_metrics_{model}_{w_alt}.nc")
-            matches = [f"gs://{f}" for f in matches]
-
-        if not matches:
-            raise HTTPException(status_code=404, detail=f"Grid file for {model}/{window} not found")
-
-        if storage.is_local:
-            ds = xr.open_dataset(matches[0])
-        else:
-            with fs.open(matches[0].removeprefix("gs://"), "rb") as f:
-                ds = xr.load_dataset(f, engine="h5netcdf")
-        if metric not in ds.data_vars:
-            ds.close()
-            raise HTTPException(status_code=404, detail=f"Metric {metric!r} not found in grid")
-
-        da = ds[metric]
-        if "lat" in da.dims and "lon" in da.dims:
-            da = da.transpose("lat", "lon")
-        da = da.squeeze()
-
-        lats = [float(v) for v in da.lat.values]
-        lons = [float(v) for v in da.lon.values]
-
-        arr = da.values.astype(float)
-        if arr.ndim != 2:
-            ds.close()
-            raise HTTPException(status_code=500, detail=f"Expected 2D array, got {arr.ndim}D {arr.shape}")
-
-        values = np.where(np.isnan(arr), None, arr).tolist()
-
-        UNIT_MAP = {"false_alarm_rate": "fraction", "miss_rate": "fraction"}
-        unit = UNIT_MAP.get(metric, "days")
-        valid = arr[~np.isnan(arr)]
-        v_min = float(valid.min()) if len(valid) > 0 else 0.0
-        v_max = float(valid.max()) if len(valid) > 0 else 0.0
-
-        ds.close()
-        return JobGridResponse(
-            job_id=job_id, model=model, window=window, metric=metric,
-            lats=lats, lons=lons, values=values, unit=unit, min=v_min, max=v_max,
-        )
-
-    return await asyncio.to_thread(_load)
+    return await asyncio.to_thread(compute_job_grid, job_id, get_storage(), model, window, metric)
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
