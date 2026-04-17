@@ -36,7 +36,39 @@
 
   // Streaming assistant turn
   let streamingContent = $state("");
-  let activeToolCalls = $state<{ name: string; done: boolean }[]>([]);
+  let activeToolCalls = $state<{ name: string; done: boolean; code?: string }[]>([]);
+  let expandedCode = $state<Set<string>>(new Set());
+
+  // Code snippets collected this turn — appended to messages on done so they persist.
+  let pendingSnippets = $state<{ name: string; code: string }[]>([]);
+
+  const CODE_TOOLS = new Set(["run_code_sandbox", "run_code"]);
+
+  function toggleCode(key: string) {
+    const next = new Set(expandedCode);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expandedCode = next;
+  }
+
+  async function copyCode(code: string) {
+    await navigator.clipboard.writeText(code);
+  }
+
+  function extractCodeFromMessage(msg: ChatMessage): { name: string; code: string }[] {
+    if (!msg.tool_calls) return [];
+    return msg.tool_calls
+      .filter((tc) => CODE_TOOLS.has(tc.function.name))
+      .map((tc) => {
+        try {
+          const args = JSON.parse(tc.function.arguments);
+          return { name: tc.function.name, code: args.code ?? "" };
+        } catch {
+          return null;
+        }
+      })
+      .filter((x): x is { name: string; code: string } => x !== null && x.code !== "");
+  }
 
   let messagesEl = $state<HTMLElement | null>(null);
 
@@ -72,8 +104,11 @@
     try {
       const detail = await getChatSession(id);
       sessionId = id;
+      // Keep user messages, assistant text, and assistant tool-call messages that
+      // contain code (so sandbox runs are visible in history).
       messages = detail.messages.filter(
-        (m) => m.role === "user" || m.role === "assistant"
+        (m) => m.role === "user" ||
+          (m.role === "assistant" && (m.content || extractCodeFromMessage(m).length > 0))
       );
     } catch (e) {
       error = "Failed to load session.";
@@ -140,6 +175,7 @@
     error = null;
     streamingContent = "";
     activeToolCalls = [];
+    pendingSnippets = [];
 
     messages = [...messages, { role: "user", content: text }];
 
@@ -148,15 +184,28 @@
         if (event.type === "text") {
           streamingContent += event.content;
         } else if (event.type === "tool_call") {
-          activeToolCalls = [...activeToolCalls, { name: event.name, done: false }];
+          const code = CODE_TOOLS.has(event.name) ? (event.input as any).code as string | undefined : undefined;
+          activeToolCalls = [...activeToolCalls, { name: event.name, done: false, code }];
+          if (code) pendingSnippets = [...pendingSnippets, { name: event.name, code }];
         } else if (event.type === "tool_result") {
           activeToolCalls = activeToolCalls.map((tc) =>
             tc.name === event.name && !tc.done ? { ...tc, done: true } : tc
           );
         } else if (event.type === "done") {
-          messages = [...messages, { role: "assistant", content: streamingContent }];
+          // Persist snippets as a synthetic message so they survive in the message list.
+          const snippetsToAdd = pendingSnippets;
+          if (snippetsToAdd.length > 0) {
+            messages = [...messages, { role: "assistant", content: "", tool_calls: snippetsToAdd.map((s, i) => ({
+              id: `local-${i}`, type: "function",
+              function: { name: s.name, arguments: JSON.stringify({ code: s.code }) }
+            })) }];
+          }
+          if (streamingContent) {
+            messages = [...messages, { role: "assistant", content: streamingContent }];
+          }
           streamingContent = "";
           activeToolCalls = [];
+          pendingSnippets = [];
           // Update session's message_count in the list
           sessions = sessions.map((s) =>
             s.id === sessionId ? { ...s, message_count: s.message_count + 2, updated_at: new Date().toISOString() } : s
@@ -283,14 +332,36 @@
       </div>
     {/if}
 
-    {#each messages as msg}
-      <div class="message {msg.role}">
-        {#if msg.role === "assistant"}
-          <div class="message-content prose">{@html renderMarkdown(msg.content)}</div>
-        {:else}
-          <div class="message-content">{msg.content}</div>
+    {#each messages as msg, i}
+      {#if msg.role === "assistant"}
+        {@const snippets = extractCodeFromMessage(msg)}
+        {#each snippets as snippet, si}
+          {@const key = `hist-${i}-${si}`}
+          <div class="code-snippet">
+            <div class="code-snippet-header">
+              <span class="code-snippet-label">{formatToolName(snippet.name)}</span>
+              <div class="code-snippet-actions">
+                <button class="code-action-btn" onclick={() => copyCode(snippet.code)}>Copy</button>
+                <button class="code-action-btn" onclick={() => toggleCode(key)}>
+                  {expandedCode.has(key) ? "Hide" : "Show"} code
+                </button>
+              </div>
+            </div>
+            {#if expandedCode.has(key)}
+              <pre class="code-block"><code>{snippet.code}</code></pre>
+            {/if}
+          </div>
+        {/each}
+        {#if msg.content}
+          <div class="message assistant">
+            <div class="message-content prose">{@html renderMarkdown(msg.content)}</div>
+          </div>
         {/if}
-      </div>
+      {:else}
+        <div class="message user">
+          <div class="message-content">{msg.content}</div>
+        </div>
+      {/if}
     {/each}
 
     {#if sending}
@@ -646,6 +717,61 @@
 
   .cursor { animation: blink 1s step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
+
+  .code-snippet {
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    overflow: hidden;
+    font-size: 0.78rem;
+  }
+
+  .code-snippet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0.65rem;
+    background: var(--color-surface);
+    gap: 0.5rem;
+  }
+
+  .code-snippet-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--color-accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .code-snippet-actions {
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  .code-action-btn {
+    padding: 0.15rem 0.5rem;
+    background: none;
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 0.68rem;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .code-action-btn:hover { color: var(--color-accent); border-color: var(--color-accent); }
+
+  .code-block {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    background: var(--color-bg);
+    border-top: 1px solid var(--color-border);
+    overflow-x: auto;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--color-text);
+    white-space: pre;
+  }
 
   .tool-indicator {
     display: flex;
