@@ -12,11 +12,11 @@ class Settings(BaseSettings):
 
     # ---------------------------------------------------------------------------
     # Database
-    # Local dev: SQLite. Production: Cloud SQL PostgreSQL via Auth Proxy socket.
-    # DB_PASSWORD is injected separately from Secret Manager and merged into
-    # the URL at engine creation time (see database.py).
+    # Local dev: compose postgres (see docker-compose.yml).
+    # Production: Cloud SQL PostgreSQL; DB_PASSWORD is injected separately from
+    # Secret Manager and merged into the URL at engine creation time (database.py).
     # ---------------------------------------------------------------------------
-    database_url: str = "sqlite:///./almanac.db"
+    database_url: str = "postgresql+psycopg2://almanac:almanac@localhost:5432/almanac"
     db_password: str = ""
 
     # ---------------------------------------------------------------------------
@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # "docker" — local Docker container (dev default)
     # "batch"  — Google Cloud Batch (production)
     # ---------------------------------------------------------------------------
+    # When the backend runs in a container and spawns ROMP as a sibling via the
+    # host Docker socket, volume mounts must use host-side paths. This setting
+    # maps container path prefixes to their host equivalents.
+    # Format: comma-separated "container_prefix=host_prefix" pairs.
+    # Example: "/app/job_outputs=/host/repo/backend/job_outputs,/testdata=/host/repo/testdata"
+    # docker-compose.yml sets this automatically using ${PWD}.
+    docker_path_map: str = ""
+
     job_runner: str = "docker"
     romp_image: str = "romp:latest"
     romp_wrapper_image: str = ""  # if set, used instead of romp_image for Cloud Run jobs
@@ -84,6 +92,10 @@ class Settings(BaseSettings):
     india_graphcast_model_dir: str = ""
     india_gencast_model_dir: str = ""
     india_fuxi_s2s_model_dir: str = ""
+
+    # Test model — points at testdata/ for local dev smoke testing.
+    # Empty in production so the model is excluded from the registry.
+    test_fuxi_model_dir: str = ""
 
     # Ethiopia model directories
     ethiopia_aifs_model_dir: str = ""

@@ -1,20 +1,22 @@
 """
-Database — SQLAlchemy Core with SQLite (dev) or PostgreSQL (production).
+Database — SQLAlchemy Core with PostgreSQL.
 
 Connection is configured via DATABASE_URL in settings:
-  sqlite:///./almanac.db          local development (default)
-  postgresql+psycopg2://...       Cloud SQL in production
+  postgresql+psycopg2://almanac:almanac@localhost:5432/almanac   local dev (compose postgres)
+  postgresql+psycopg2://...                                       Cloud SQL in production
 
-No ORM — raw SQL via sqlalchemy.text() with named :param placeholders,
-which work identically on both backends.
+In production, DB_PASSWORD is injected separately from Secret Manager and merged
+into the URL at engine creation time (Cloud Run can't interpolate a secret value
+directly into another env var string).
+
+No ORM — raw SQL via sqlalchemy.text() with named :param placeholders.
 """
 
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.pool import NullPool
+from sqlalchemy import create_engine, text
 
 from .config import settings
 
@@ -22,20 +24,6 @@ from .config import settings
 def _make_engine():
     from sqlalchemy.engine import make_url
     url = make_url(settings.database_url)
-    if url.get_dialect().name == "sqlite":
-        engine = create_engine(
-            url,
-            connect_args={"check_same_thread": False},
-            poolclass=NullPool,
-        )
-        # WAL mode allows concurrent reads and serialises writes without blocking.
-        @event.listens_for(engine, "connect")
-        def _set_wal(dbapi_conn, _):
-            dbapi_conn.execute("PRAGMA journal_mode=WAL")
-        return engine
-    # PostgreSQL: inject DB_PASSWORD from Secret Manager if not already in URL.
-    # Cloud Run injects it as a separate env var because Terraform can't easily
-    # interpolate a secret value into another env var's string.
     if settings.db_password and not url.password:
         url = url.set(password=settings.db_password)
     return create_engine(url, pool_pre_ping=True)
@@ -90,21 +78,13 @@ def init_db() -> None:
                 error        TEXT
             )
         """))
-        # Add run_id to existing deployments that predate this column.
-        try:
-            conn.execute(text("ALTER TABLE jobs ADD COLUMN run_id TEXT"))
-        except Exception:
-            pass  # column already exists
-        # Drop the FK constraint on dataset_id if it exists from an earlier schema.
-        # Demo datasets are config-driven and never stored in the datasets table,
-        # so the constraint causes an IntegrityError on PostgreSQL for every demo job.
-        # The endpoint validates dataset existence before inserting, making the FK redundant.
-        try:
-            conn.execute(text(
-                "ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_dataset_id_fkey"
-            ))
-        except Exception:
-            pass  # SQLite does not support this syntax — safe to ignore
+        # Migration shims for deployments that predate these schema changes.
+        conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS run_id TEXT"))
+        # Demo datasets are config-driven and not stored in the datasets table,
+        # so this FK causes an IntegrityError for every demo job submission.
+        conn.execute(text(
+            "ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_dataset_id_fkey"
+        ))
 
 
 def get_or_create_user(conn, external_id: str, email: str | None = None) -> dict:
