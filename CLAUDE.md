@@ -2,21 +2,50 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Commands
+## Local dev setup
 
-### Backend
+The recommended dev environment uses Docker Compose. It starts a postgres container, the FastAPI backend with hot reload, and the Vite dev server.
+
 ```bash
-cd backend
-uv sync                                        # install dependencies
-uv run uvicorn app.main:app --reload --port 8000  # run dev server
-uv add <package>                               # add a dependency
+# First time
+cp .env.example backend/.env   # fill in GLOBUS_CLIENT_ID etc.
+cp .env.example web/.env       # fill in VITE_GLOBUS_CLIENT_ID etc.
+
+docker compose up --build
 ```
 
-### Frontend
+Services:
+- Frontend: http://localhost:5173
+- Backend: http://localhost:8000
+- Postgres: localhost:5432 (user: almanac, password: almanac, db: almanac)
+
+Source is volume-mounted into both containers so changes hot-reload without rebuilding.
+
+The compose file automatically mounts `testdata/` and sets `DEMO_OBS_DATASETS` and `TEST_FUXI_MODEL_DIR` to point at it. This wires up the **"FuXi (Test)"** model so you can submit a full end-to-end benchmark job without any real model data. The testdata is synthetic (seeded random rainfall over a 5×5 grid, 1998–2000); regenerate it with:
+
 ```bash
+uv run scripts/generate_test_data.py
+```
+
+### Running without Docker
+
+Requires a local postgres instance with the compose credentials (or update `DATABASE_URL` in `backend/.env`).
+
+```bash
+# Backend
+cd backend
+uv sync
+uv run uvicorn app.main:app --reload --port 8000
+
+# Frontend
 cd web
 npm install
-npm run dev          # dev server at http://localhost:5173
+npm run dev
+```
+
+### Other frontend commands
+```bash
+cd web
 npm run check        # type-check with svelte-check
 npm run lint         # prettier check
 npm run format       # prettier write
