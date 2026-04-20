@@ -28,6 +28,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+// ---- Config ------------------------------------------------------------------
+
+export async function getMetricDefinitions() {
+  return request<MetricDefinition[]>("/config/metrics");
+}
+
+export async function getRompDefaults() {
+  return request<RompDefaults>("/config/romp-defaults");
+}
+
 // ---- Regions -----------------------------------------------------------------
 
 export async function getRegions() {

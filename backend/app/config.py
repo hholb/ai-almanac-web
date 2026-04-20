@@ -4,6 +4,7 @@ import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _MODELS_YAML = Path(__file__).parent / "config" / "models.yaml"
+_ROMP_YAML   = Path(__file__).parent / "config" / "romp.yaml"
 
 
 class Settings(BaseSettings):
@@ -110,6 +111,28 @@ def get_model_registry() -> list[dict]:
         m["model_dir"] = model_dir
         result.append(m)
     return result
+
+
+_romp_config_cache: dict | None = None
+
+
+def get_romp_config() -> dict:
+    """Load metric definitions and ROMP parameter defaults from romp.yaml."""
+    global _romp_config_cache
+    if _romp_config_cache is None:
+        _romp_config_cache = yaml.safe_load(_ROMP_YAML.read_text())
+    return _romp_config_cache
+
+
+def get_romp_defaults() -> dict:
+    """Return the default ROMP run parameters."""
+    return get_romp_config()["defaults"]
+
+
+def get_metric_definitions() -> list[dict]:
+    """Return all metric definitions (deterministic + probabilistic)."""
+    cfg = get_romp_config()["metrics"]
+    return cfg["deterministic"] + cfg["probabilistic"]
 
 
 def get_demo_datasets() -> list[dict]:

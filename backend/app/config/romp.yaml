@@ -1,0 +1,126 @@
+# ROMP configuration reference
+#
+# metrics: definitions for all metrics ROMP can compute, used for display
+#          labels, units, and documentation in the frontend and API.
+#
+# defaults: default values for optional ROMP run parameters. These match
+#           the defaults in ROMP's generate_config.py and are used when a
+#           field is not set on the model entry in models.yaml or the
+#           submitted job's RompParams.
+
+metrics:
+  deterministic:
+    - id: false_alarm_rate
+      label: "False Alarm Rate"
+      abbreviation: FAR
+      unit: fraction
+      range: [0, 1]
+      lower_is_better: true
+      description: >
+        Fraction of forecast events that did not occur (false alarms).
+        FAR = FP / (TP + FP).
+
+    - id: miss_rate
+      label: "Miss Rate"
+      abbreviation: MR
+      unit: fraction
+      range: [0, 1]
+      lower_is_better: true
+      description: >
+        Fraction of observed events that were not forecast.
+        MR = FN / (TP + FN).
+
+    - id: mae
+      label: "Mean Absolute Error"
+      abbreviation: MAE
+      unit: mm
+      lower_is_better: true
+      description: >
+        Average absolute difference between forecast and observed rainfall.
+
+  probabilistic:
+    - id: brier_score
+      label: "Brier Score"
+      abbreviation: BS
+      unit: dimensionless
+      range: [0, 1]
+      lower_is_better: true
+      description: >
+        Mean squared error of probability forecasts.
+        BS = 0 is perfect; BS = 1 is worst possible.
+
+    - id: brier_skill_score
+      label: "Brier Skill Score"
+      abbreviation: BSS
+      unit: dimensionless
+      range: [-inf, 1]
+      lower_is_better: false
+      description: >
+        Skill of BS relative to a climatology reference forecast.
+        BSS > 0 indicates better than climatology.
+
+    - id: ranked_probability_score
+      label: "Ranked Probability Score"
+      abbreviation: RPS
+      unit: dimensionless
+      lower_is_better: true
+      description: >
+        Cumulative squared difference between forecast and observed
+        probability distributions across multiple thresholds.
+
+    - id: ranked_probability_skill_score
+      label: "Ranked Probability Skill Score"
+      abbreviation: RPSS
+      unit: dimensionless
+      range: [-inf, 1]
+      lower_is_better: false
+      description: >
+        Skill of RPS relative to a climatology reference forecast.
+        RPSS > 0 indicates better than climatology.
+
+    - id: auc
+      label: "Area Under ROC Curve"
+      abbreviation: AUC
+      unit: fraction
+      range: [0, 1]
+      lower_is_better: false
+      description: >
+        Area under the Receiver Operating Characteristic curve.
+        AUC = 0.5 is no skill; AUC = 1.0 is perfect discrimination.
+
+    - id: reliability
+      label: "Reliability"
+      abbreviation: Reliability
+      unit: null
+      description: >
+        Calibration of probability forecasts: how closely forecast
+        probabilities match observed frequencies.
+
+# Default values for optional ROMP run parameters.
+# Keys match the ROMP_* env var suffix (lowercased).
+defaults:
+  obs: "CHIRPS_IMERG"
+  obs_file_pattern: "{}.nc"
+  obs_var: "RAINFALL"
+  model_var: "tp"
+  file_pattern: "{}.nc"
+  region: "Ethiopia"
+  nc_mask: null
+  thresh_file: null
+  wet_threshold: 20        # mm — scalar rainfall threshold for wet day
+  wet_init: 1              # mm — minimum threshold to count as wet
+  wet_spell: 3             # days — minimum consecutive wet days for a wet spell
+  dry_spell: 7             # days — minimum consecutive dry days for a dry spell
+  dry_extent: 0            # days — dry spell search window extension
+  start_date: "2019-05-01"
+  end_date: "2024-07-31"
+  start_year_clim: 1998    # first year of the climatology period
+  end_year_clim: 2024      # last year of the climatology period
+  max_forecast_day: 30     # maximum forecast lead day to evaluate
+  probabilistic: false
+  members: "All"           # "All" or comma-separated ensemble member indices
+  parallel: true
+  ref_model: "climatology"
+  ref_model_dir: null      # defaults to obs_dir when null
+  init_days: "0,3"         # weekdays forecasts are initialised (0=Mon)
+  date_filter_year: null   # reference year for init-day calendar alignment; defaults to start_date year
