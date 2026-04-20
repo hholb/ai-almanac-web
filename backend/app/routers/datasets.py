@@ -72,16 +72,13 @@ async def request_upload_url(body: UploadUrlRequest, user: CurrentUser, request:
     dataset_id = str(uuid.uuid4())
     storage_key = f"{user['id']}/{dataset_id}/{body.filename}"
 
-    def _insert():
-        with get_db() as conn:
-            conn.execute(
-                text("INSERT INTO datasets (id, user_id, name, status, storage_key, created_at) "
-                     "VALUES (:id, :uid, :name, 'pending', :key, :now)"),
-                {"id": dataset_id, "uid": user["id"], "name": body.name,
-                 "key": storage_key, "now": datetime.now(timezone.utc).isoformat()},
-            )
-
-    await asyncio.to_thread(_insert)
+    async with get_db() as conn:
+        await conn.execute(
+            text("INSERT INTO datasets (id, user_id, name, status, storage_key, created_at) "
+                 "VALUES (:id, :uid, :name, 'pending', :key, :now)"),
+            {"id": dataset_id, "uid": user["id"], "name": body.name,
+             "key": storage_key, "now": datetime.now(timezone.utc).isoformat()},
+        )
 
     storage = get_storage()
     upload_url = storage.generate_upload_url(storage_key, str(request.base_url))
@@ -92,52 +89,36 @@ async def request_upload_url(body: UploadUrlRequest, user: CurrentUser, request:
 async def confirm_upload(dataset_id: str, user: CurrentUser):
     storage = get_storage()
 
-    def _confirm():
-        with get_db() as conn:
-            row = conn.execute(
-                text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
-                {"id": dataset_id, "uid": user["id"]},
-            ).mappings().fetchone()
-            if not row:
-                return None, "not_found"
-            row = dict(row)
-            if row["status"] != "pending":
-                return None, row["status"]
+    async with get_db() as conn:
+        row = (await conn.execute(
+            text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
+            {"id": dataset_id, "uid": user["id"]},
+        )).mappings().fetchone()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+        row = dict(row)
+        if row["status"] != "pending":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Dataset is already {row['status']}")
 
-            # Verify the object actually landed in storage before marking ready.
-            if not storage.confirm_upload(row["storage_key"]):
-                return None, "upload_not_found"
+        exists = await asyncio.to_thread(storage.confirm_upload, row["storage_key"])
+        if not exists:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Upload not found in storage — did the upload complete?")
 
-            now = datetime.now(timezone.utc).isoformat()
-            result = conn.execute(
-                text("UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id RETURNING *"),
-                {"now": now, "id": dataset_id},
-            )
-            updated = dict(result.mappings().fetchone())
-            result.close()
-            return updated, None
-
-    result, err = await asyncio.to_thread(_confirm)
-    if err == "not_found":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
-    if err == "upload_not_found":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Upload not found in storage — did the upload complete?")
-    if err:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Dataset is already {err}")
-    return DatasetOut(**result)
+        result = await conn.execute(
+            text("UPDATE datasets SET status = 'ready', ready_at = :now WHERE id = :id RETURNING *"),
+            {"now": datetime.now(timezone.utc).isoformat(), "id": dataset_id},
+        )
+        return DatasetOut(**dict(result.mappings().fetchone()))
 
 
 @router.get("", response_model=list[DatasetOut])
 async def list_datasets(user: CurrentUser):
-    def _list():
-        with get_db() as conn:
-            return [dict(r) for r in conn.execute(
-                text("SELECT * FROM datasets WHERE user_id = :uid ORDER BY created_at DESC"),
-                {"uid": user["id"]},
-            ).mappings().fetchall()]
-
-    rows = await asyncio.to_thread(_list)
-    user_datasets = [DatasetOut(**r) for r in rows]
+    async with get_db() as conn:
+        rows = (await conn.execute(
+            text("SELECT * FROM datasets WHERE user_id = :uid ORDER BY created_at DESC"),
+            {"uid": user["id"]},
+        )).mappings().fetchall()
+    user_datasets = [DatasetOut(**dict(r)) for r in rows]
 
     demo_datasets = []
     for d in get_demo_datasets():
@@ -173,34 +154,25 @@ async def dataset_from_path(body: DatasetFromPathRequest, user: CurrentUser):
     if not Path(body.obs_dir).is_dir():
         raise HTTPException(status_code=400, detail=f"obs_dir does not exist: {body.obs_dir}")
 
-    dataset_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
+    dataset_id = str(uuid.uuid4())
 
-    def _insert():
-        with get_db() as conn:
-            result = conn.execute(
-                text("INSERT INTO datasets (id, user_id, name, status, storage_key, created_at, ready_at) "
-                     "VALUES (:id, :uid, :name, 'ready', :key, :now, :now) RETURNING *"),
-                {"id": dataset_id, "uid": user["id"], "name": body.name, "key": body.obs_dir, "now": now},
-            )
-            row = dict(result.mappings().fetchone())
-            result.close()
-            return row
-
-    return DatasetOut(**await asyncio.to_thread(_insert))
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("INSERT INTO datasets (id, user_id, name, status, storage_key, created_at, ready_at) "
+                 "VALUES (:id, :uid, :name, 'ready', :key, :now, :now) RETURNING *"),
+            {"id": dataset_id, "uid": user["id"], "name": body.name, "key": body.obs_dir, "now": now},
+        )
+        return DatasetOut(**dict(result.mappings().fetchone()))
 
 
 @router.get("/{dataset_id}", response_model=DatasetOut)
 async def get_dataset(dataset_id: str, user: CurrentUser):
-    def _get():
-        with get_db() as conn:
-            row = conn.execute(
-                text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
-                {"id": dataset_id, "uid": user["id"]},
-            ).mappings().fetchone()
-            return dict(row) if row else None
-
-    row = await asyncio.to_thread(_get)
+    async with get_db() as conn:
+        row = (await conn.execute(
+            text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
+            {"id": dataset_id, "uid": user["id"]},
+        )).mappings().fetchone()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
-    return DatasetOut(**row)
+    return DatasetOut(**dict(row))

@@ -6,29 +6,44 @@ as the external user ID so the server stays usable without credentials.
 """
 
 import asyncio
+import time
+from threading import Lock
 from typing import Annotated
 
 import globus_sdk
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import text
 
 from .config import settings
 from .database import get_db, get_or_create_user
 
 _bearer = HTTPBearer()
 
+_cache: dict[str, tuple[dict, float]] = {}
+_cache_lock = Lock()
+_TTL = 60.0  # seconds
+
 
 def _introspect_sync(token: str) -> dict:
-    if not settings.globus_client_id:
-        return {"active": True, "sub": token, "email": None}
+    now = time.monotonic()
+    with _cache_lock:
+        if token in _cache:
+            result, expires_at = _cache[token]
+            if now < expires_at:
+                return result
 
-    client = globus_sdk.ConfidentialAppAuthClient(
-        settings.globus_client_id,
-        settings.globus_client_secret,
-    )
-    resp = client.oauth2_token_introspect(token, include="identity_set")
-    return resp.data
+    if not settings.globus_client_id:
+        result = {"active": True, "sub": token, "email": None}
+    else:
+        client = globus_sdk.ConfidentialAppAuthClient(
+            settings.globus_client_id,
+            settings.globus_client_secret,
+        )
+        result = client.oauth2_token_introspect(token, include="identity_set").data
+
+    with _cache_lock:
+        _cache[token] = (result, time.monotonic() + _TTL)
+    return result
 
 
 async def current_user(
@@ -39,11 +54,8 @@ async def current_user(
     if not identity.get("active") or not identity.get("sub"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    def _get_or_create():
-        with get_db() as conn:
-            return get_or_create_user(conn, external_id=identity["sub"], email=identity.get("email"))
-
-    return await asyncio.to_thread(_get_or_create)
+    async with get_db() as conn:
+        return await get_or_create_user(conn, external_id=identity["sub"], email=identity.get("email"))
 
 
 CurrentUser = Annotated[dict, Depends(current_user)]

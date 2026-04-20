@@ -12,8 +12,12 @@ from __future__ import annotations
 
 import datetime
 import os
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
+
+# HDF5/NetCDF4 is not thread-safe. Serialize all dataset opens with this lock.
+_nc_lock = threading.Lock()
 
 
 class StorageBackend(ABC):
@@ -58,6 +62,21 @@ class StorageBackend(ABC):
     @abstractmethod
     def list_result_files(self, job_id: str) -> list[tuple[str, str]]:
         """Return [(kind, filename), ...] for all result files for a job."""
+
+    @abstractmethod
+    def list_nc_output_files(self, job_id: str) -> list:
+        """Return list of spatial_metrics_*.nc paths/URIs for a job."""
+
+    @abstractmethod
+    def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
+        """
+        Return the path/URI for spatial_metrics_{model}_{window}.nc, or None if
+        not found. Tries both the original window string and a hyphen→comma variant.
+        """
+
+    @abstractmethod
+    def open_nc_dataset(self, path):
+        """Open a NetCDF path/URI and return an xarray Dataset."""
 
     @property
     def is_local(self) -> bool:
@@ -108,6 +127,23 @@ class LocalStorage(StorageBackend):
                     if f.is_file():
                         results.append((kind, f.name))
         return results
+
+    def list_nc_output_files(self, job_id: str) -> list:
+        output_dir = self._outputs_dir / job_id / "output"
+        return sorted(output_dir.glob("spatial_metrics_*.nc")) if output_dir.exists() else []
+
+    def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
+        output_dir = self._outputs_dir / job_id / "output"
+        for w in (window, window.replace("-", ",")):
+            matches = list(output_dir.glob(f"spatial_metrics_{model}_{w}.nc"))
+            if matches:
+                return str(matches[0])
+        return None
+
+    def open_nc_dataset(self, path):
+        import xarray as xr
+        with _nc_lock:
+            return xr.load_dataset(path)
 
     def log_path(self, job_id: str) -> Path:
         p = self._outputs_dir / job_id / "run.log"
@@ -185,6 +221,29 @@ class GCSStorage(StorageBackend):
                 if filename:
                     results.append((kind, filename))
         return results
+
+    def list_nc_output_files(self, job_id: str) -> list:
+        import gcsfs
+        fs = gcsfs.GCSFileSystem()
+        prefix = f"{self._outputs_bucket}/{job_id}/output/spatial_metrics_"
+        return [f"gs://{f}" for f in sorted(fs.glob(f"{prefix}*.nc"))]
+
+    def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
+        import gcsfs
+        fs = gcsfs.GCSFileSystem()
+        base = f"{self._outputs_bucket}/{job_id}/output"
+        for w in (window, window.replace("-", ",")):
+            matches = fs.glob(f"{base}/spatial_metrics_{model}_{w}.nc")
+            if matches:
+                return f"gs://{matches[0]}"
+        return None
+
+    def open_nc_dataset(self, path):
+        import xarray as xr
+        import gcsfs
+        fs = gcsfs.GCSFileSystem()
+        with fs.open(str(path).removeprefix("gs://"), "rb") as f:
+            return xr.load_dataset(f, engine="h5netcdf")
 
     def read_log(self, job_id: str) -> str:
         blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/run.log")

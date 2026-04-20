@@ -5,7 +5,6 @@ asyncio.to_thread() from the async route handlers in routers/jobs.py.
 """
 from __future__ import annotations
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 
 from .storage import StorageBackend
@@ -68,23 +67,11 @@ class JobGridResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _get_nc_files(storage: StorageBackend, job_id: str) -> list:
-    if storage.is_local:
-        output_dir = storage._outputs_dir / job_id / "output"
-        return sorted(output_dir.glob("spatial_metrics_*.nc")) if output_dir.exists() else []
-    import gcsfs
-    fs = gcsfs.GCSFileSystem()
-    prefix = f"{storage._outputs_bucket}/{job_id}/output/spatial_metrics_"
-    return [f"gs://{f}" for f in sorted(fs.glob(f"{prefix}*.nc"))]
+    return storage.list_nc_output_files(job_id)
 
 
 def _open_nc(storage: StorageBackend, path):
-    import xarray as xr
-    if storage.is_local:
-        return xr.open_dataset(path)
-    import gcsfs
-    fs = gcsfs.GCSFileSystem()
-    with fs.open(str(path).removeprefix("gs://"), "rb") as f:
-        return xr.load_dataset(f, engine="h5netcdf")
+    return storage.open_nc_dataset(path)
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +90,7 @@ def compute_job_metrics(
     try:
         import numpy as np
     except ImportError:
-        raise HTTPException(status_code=503, detail="xarray not available on this server")
+        raise RuntimeError("numpy/xarray not available on this server")
 
     nc_files = _get_nc_files(storage, job_id)
     has_bbox = any(v is not None for v in (lat_min, lat_max, lon_min, lon_max))
@@ -183,31 +170,16 @@ def compute_job_grid(
     try:
         import numpy as np
     except ImportError:
-        raise HTTPException(status_code=503, detail="xarray not available")
+        raise RuntimeError("numpy/xarray not available on this server")
 
-    w_alt = window.replace("-", ",")
+    match = storage.find_nc_output_file(job_id, model, window)
+    if not match:
+        raise FileNotFoundError(f"Grid file for {model}/{window} not found")
 
-    if storage.is_local:
-        output_dir = storage._outputs_dir / job_id / "output"
-        matches = list(output_dir.glob(f"spatial_metrics_{model}_{window}.nc"))
-        if not matches:
-            matches = list(output_dir.glob(f"spatial_metrics_{model}_{w_alt}.nc"))
-    else:
-        import gcsfs
-        fs = gcsfs.GCSFileSystem()
-        base = f"{storage._outputs_bucket}/{job_id}/output"
-        matches = fs.glob(f"{base}/spatial_metrics_{model}_{window}.nc")
-        if not matches:
-            matches = fs.glob(f"{base}/spatial_metrics_{model}_{w_alt}.nc")
-        matches = [f"gs://{f}" for f in matches]
-
-    if not matches:
-        raise HTTPException(status_code=404, detail=f"Grid file for {model}/{window} not found")
-
-    ds = _open_nc(storage, matches[0])
+    ds = _open_nc(storage, match)
     if metric not in ds.data_vars:
         ds.close()
-        raise HTTPException(status_code=404, detail=f"Metric {metric!r} not found in grid")
+        raise KeyError(f"Metric {metric!r} not found in grid")
 
     da = ds[metric]
     if "lat" in da.dims and "lon" in da.dims:
@@ -220,7 +192,7 @@ def compute_job_grid(
 
     if arr.ndim != 2:
         ds.close()
-        raise HTTPException(status_code=500, detail=f"Expected 2D array, got {arr.ndim}D {arr.shape}")
+        raise ValueError(f"Expected 2D array, got {arr.ndim}D {arr.shape}")
 
     values = np.where(np.isnan(arr), None, arr).tolist()
     unit = UNIT_MAP.get(metric, "days")

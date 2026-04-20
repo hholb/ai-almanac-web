@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # Production: Cloud SQL PostgreSQL; DB_PASSWORD is injected separately from
     # Secret Manager and merged into the URL at engine creation time (database.py).
     # ---------------------------------------------------------------------------
-    database_url: str = "postgresql+psycopg2://almanac:almanac@localhost:5432/almanac"
+    database_url: str = "postgresql+asyncpg://almanac:almanac@localhost:5432/almanac"
     db_password: str = ""
 
     # ---------------------------------------------------------------------------

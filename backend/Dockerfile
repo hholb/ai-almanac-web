@@ -9,8 +9,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# Copy application code
+# Copy application code and migrations
 COPY app/ app/
+COPY alembic/ alembic/
+COPY alembic.ini .
 
 ENV PATH="/app/.venv/bin:$PATH"
 
@@ -22,7 +24,7 @@ FROM docker:cli AS docker-cli
 
 FROM base AS dev
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
 
 FROM base AS prod
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

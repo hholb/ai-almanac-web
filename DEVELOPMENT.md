@@ -92,7 +92,7 @@ See `backend/.env.example` for the full list with descriptions. The key switches
 
 | Variable | Local default | Production value |
 |---|---|---|
-| `DATABASE_URL` | `sqlite:///./almanac.db` | `postgresql+psycopg2://...` (Cloud SQL socket) |
+| `DATABASE_URL` | `sqlite:///./almanac.db` | `postgresql+asyncpg://...` (Cloud SQL socket) |
 | `STORAGE_BACKEND` | `local` | `gcs` |
 | `JOB_RUNNER` | `docker` | `batch` |
 

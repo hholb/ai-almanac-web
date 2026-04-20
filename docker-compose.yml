@@ -19,12 +19,12 @@ services:
     build:
       context: ./backend
       target: dev
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     env_file: ./backend/.env
     environment:
       # Override DATABASE_URL so the backend reaches the compose postgres service.
       # All other settings come from backend/.env.
-      DATABASE_URL: postgresql+psycopg2://almanac:almanac@db:5432/almanac
+      DATABASE_URL: postgresql+asyncpg://almanac:almanac@db:5432/almanac
       # Synthetic test data for end-to-end smoke testing without real model data.
       DEMO_OBS_DATASETS: "Test Ethiopia=/testdata/ethiopia/obs"
       TEST_FUXI_MODEL_DIR: /testdata/ethiopia/fuxi
@@ -32,6 +32,8 @@ services:
       DOCKER_PATH_MAP: "/app/job_outputs=${PWD}/backend/job_outputs,/app/uploads=${PWD}/backend/uploads,/testdata=${PWD}/testdata"
     volumes:
       - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/uploads:/app/uploads
       - ./backend/job_outputs:/app/job_outputs
       - ./testdata:/testdata:ro

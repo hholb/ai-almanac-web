@@ -11,6 +11,7 @@ happen asynchronously as the job completes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 import threading
@@ -54,10 +55,11 @@ class DockerRunner(JobRunner):
         self._storage = storage
 
     def run_job(self, job_id: str, config: dict) -> None:
-        t = threading.Thread(target=self._run, args=(job_id, config), daemon=True)
+        loop = asyncio.get_event_loop()
+        t = threading.Thread(target=self._run, args=(job_id, config, loop), daemon=True)
         t.start()
 
-    def _run(self, job_id: str, config: dict) -> None:
+    def _run(self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop) -> None:
         from .storage import LocalStorage
         assert isinstance(self._storage, LocalStorage), \
             "DockerRunner requires LocalStorage"
@@ -119,24 +121,24 @@ class DockerRunner(JobRunner):
                 )
 
             if result.returncode == 0:
-                _update_status(job_id, "complete")
+                _update_status(job_id, "complete", loop=loop)
                 logger.info("Job %s completed", job_id)
             elif result.returncode in (-11, 139):
                 # SIGSEGV in a C extension after outputs are written — treat as success.
                 if any(Path(output_dir).iterdir()):
-                    _update_status(job_id, "complete")
+                    _update_status(job_id, "complete", loop=loop)
                     logger.warning("Job %s segfaulted but has output — marking complete", job_id)
                 else:
-                    _update_status(job_id, "failed", error="Container segfaulted with no output")
+                    _update_status(job_id, "failed", error="Container segfaulted with no output", loop=loop)
             else:
-                _update_status(job_id, "failed", error=f"Container exited with code {result.returncode}")
+                _update_status(job_id, "failed", error=f"Container exited with code {result.returncode}", loop=loop)
 
         except subprocess.TimeoutExpired:
             subprocess.run(["docker", "stop", f"romp-{job_id}"], check=False)
-            _update_status(job_id, "failed", error="Job exceeded timeout")
+            _update_status(job_id, "failed", error="Job exceeded timeout", loop=loop)
             logger.error("Job %s timed out", job_id)
         except Exception as exc:
-            _update_status(job_id, "failed", error=str(exc))
+            _update_status(job_id, "failed", error=str(exc), loop=loop)
             logger.exception("Job %s raised an unexpected error", job_id)
 
 
@@ -170,10 +172,11 @@ class CloudRunJobRunner(JobRunner):
         self._job_memory_prob = job_memory_probabilistic
 
     def run_job(self, job_id: str, config: dict) -> None:
-        t = threading.Thread(target=self._submit, args=(job_id, config), daemon=True)
+        loop = asyncio.get_event_loop()
+        t = threading.Thread(target=self._submit, args=(job_id, config, loop), daemon=True)
         t.start()
 
-    def _submit(self, job_id: str, config: dict) -> None:
+    def _submit(self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop) -> None:
         from google.cloud import run_v2
         from google.protobuf import duration_pb2
 
@@ -250,10 +253,10 @@ class CloudRunJobRunner(JobRunner):
             execution_name = execution.name
             logger.info("Started execution %s", execution_name)
 
-            self._poll(job_id, execution_name)
+            self._poll(job_id, execution_name, loop)
 
         except Exception as exc:
-            _update_status(job_id, "failed", error=str(exc))
+            _update_status(job_id, "failed", error=str(exc), loop=loop)
             logger.exception("Cloud Run Job failed for %s", job_id)
         finally:
             try:
@@ -271,7 +274,7 @@ class CloudRunJobRunner(JobRunner):
         result = fetch_cloud_logs(filter_expr, max_entries=20, descending=True)
         return result if result != "(no logs found)" else "Cloud Run Job task failed — check Cloud Logging"
 
-    def _poll(self, job_id: str, execution_name: str) -> None:
+    def _poll(self, job_id: str, execution_name: str, loop: asyncio.AbstractEventLoop) -> None:
         import time
         from google.cloud import run_v2
 
@@ -281,12 +284,12 @@ class CloudRunJobRunner(JobRunner):
             try:
                 ex = client.get_execution(name=execution_name)
                 if ex.succeeded_count > 0:
-                    _update_status(job_id, "complete")
+                    _update_status(job_id, "complete", loop=loop)
                     logger.info("Execution %s succeeded", execution_name)
                     return
                 if ex.failed_count > 0:
                     error_msg = _fetch_execution_error(execution_name)
-                    _update_status(job_id, "failed", error=error_msg)
+                    _update_status(job_id, "failed", error=error_msg, loop=loop)
                     logger.error("Execution %s failed", execution_name)
                     return
             except Exception as exc:
@@ -303,10 +306,11 @@ class ModalRunner(JobRunner):
         self._timeout = job_timeout_seconds
 
     def run_job(self, job_id: str, config: dict) -> None:
-        t = threading.Thread(target=self._submit_and_poll, args=(job_id, config), daemon=True)
+        loop = asyncio.get_event_loop()
+        t = threading.Thread(target=self._submit_and_poll, args=(job_id, config, loop), daemon=True)
         t.start()
 
-    def _submit_and_poll(self, job_id: str, config: dict) -> None:
+    def _submit_and_poll(self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop) -> None:
         import time
         import modal
 
@@ -315,7 +319,7 @@ class ModalRunner(JobRunner):
             handle = run_romp.spawn(job_id, config, self._outputs_bucket)
             logger.info("Spawned Modal function for job %s", job_id)
         except Exception as exc:
-            _update_status(job_id, "failed", error=f"Failed to spawn Modal function: {exc}")
+            _update_status(job_id, "failed", error=f"Failed to spawn Modal function: {exc}", loop=loop)
             logger.exception("Failed to spawn Modal job %s", job_id)
             return
 
@@ -324,18 +328,18 @@ class ModalRunner(JobRunner):
             time.sleep(15)
             try:
                 handle.get(timeout=0)
-                _update_status(job_id, "complete")
+                _update_status(job_id, "complete", loop=loop)
                 logger.info("Modal job %s completed", job_id)
                 return
             except TimeoutError:
                 continue  # still running
             except Exception as exc:
-                _update_status(job_id, "failed", error=str(exc))
+                _update_status(job_id, "failed", error=str(exc), loop=loop)
                 logger.error("Modal job %s failed: %s", job_id, exc)
                 return
 
         handle.cancel()
-        _update_status(job_id, "failed", error="Job exceeded timeout")
+        _update_status(job_id, "failed", error="Job exceeded timeout", loop=loop)
         logger.error("Modal job %s timed out", job_id)
 
 
@@ -343,23 +347,35 @@ class ModalRunner(JobRunner):
 # Shared status helper
 # ---------------------------------------------------------------------------
 
-def _update_status(job_id: str, status: str, error: str | None = None) -> None:
+def _update_status(
+    job_id: str,
+    status: str,
+    error: str | None = None,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> None:
+    """Write a job status update from a background thread onto the main event loop."""
     from datetime import datetime, timezone
     from ..database import get_db
     from sqlalchemy import text
 
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as conn:
-        if status == "complete":
-            conn.execute(
-                text("UPDATE jobs SET status = :status, completed_at = :now WHERE id = :id"),
-                {"status": status, "now": now, "id": job_id},
-            )
-        else:
-            conn.execute(
-                text("UPDATE jobs SET status = :status, completed_at = :now, error = :error WHERE id = :id"),
-                {"status": status, "now": now, "error": error, "id": job_id},
-            )
+    async def _do() -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db() as conn:
+            if status == "complete":
+                await conn.execute(
+                    text("UPDATE jobs SET status = :status, completed_at = :now WHERE id = :id"),
+                    {"status": status, "now": now, "id": job_id},
+                )
+            else:
+                await conn.execute(
+                    text("UPDATE jobs SET status = :status, completed_at = :now, error = :error WHERE id = :id"),
+                    {"status": status, "now": now, "error": error, "id": job_id},
+                )
+
+    if loop is None:
+        loop = asyncio.get_event_loop()
+    future = asyncio.run_coroutine_threadsafe(_do(), loop)
+    future.result(timeout=30)
 
 
 # ---------------------------------------------------------------------------

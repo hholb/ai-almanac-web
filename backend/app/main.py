@@ -1,4 +1,5 @@
-import asyncio
+import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -6,15 +7,19 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .database import init_db
 from .routers import config, datasets, jobs, regions
 from .services.storage import get_storage
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await asyncio.to_thread(init_db)
-
     # Create local directories only when running with the local storage backend.
     storage = get_storage()
     if storage.is_local:
@@ -25,6 +30,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Almanac API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info("%s %s %d %.1fms", request.method, request.url.path, response.status_code, duration_ms)
+    return response
 
 app.add_middleware(
     CORSMiddleware,
