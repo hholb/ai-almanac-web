@@ -38,13 +38,36 @@ Three-layer stack with environment-variable-driven backend switching:
 ### Backend (`backend/app/`)
 
 - `main.py` — FastAPI app, CORS, lifespan hooks, local upload endpoint
-- `config.py` — All settings via pydantic-settings (reads from `.env`)
+- `config.py` — All settings via pydantic-settings (reads from `.env`); also exposes `get_model_registry()`, `get_metric_definitions()`, and `get_romp_defaults()` loaders
 - `auth.py` — Globus token introspection dependency; stub mode when `GLOBUS_CLIENT_ID` is unset (raw Bearer token used as user ID)
 - `database.py` — SQLAlchemy Core; SQLite locally, PostgreSQL in prod via `DATABASE_URL`
+- `routers/config.py` — Serves `GET /config/metrics` and `GET /config/romp-defaults` from YAML (no auth required)
 - `routers/datasets.py` — Dataset registration and upload URL generation
 - `routers/jobs.py` — Job submission, polling, results, metrics
 - `services/storage.py` — `LocalStorage` / `GCSStorage` factory switching on `STORAGE_BACKEND`
 - `services/runner.py` — `DockerRunner` / `BatchRunner` factory switching on `JOB_RUNNER`
+
+### Config files (`backend/app/config/`)
+
+These YAML files are the single source of truth for domain configuration. Avoid hardcoding their contents anywhere else — the frontend fetches what it needs via `/config/*` endpoints.
+
+**`models.yaml`** — Model registry. Each entry defines a model that ROMP can evaluate.
+
+To add a model:
+1. Add an entry with `id`, `display_name`, `region`, `model_type`, and the fields below.
+2. Add a corresponding `<region>_<id>_model_dir` setting to `Settings` in `config.py` and expose it via an env var.
+3. The model is automatically excluded at runtime if its `model_dir_setting` resolves to an empty string.
+
+Key fields:
+- `model_dir_setting` — name of the `Settings` attribute that holds the data directory path
+- `probabilistic` — set `true` for ensemble models; affects which metrics ROMP computes and Cloud Run resource allocation
+- `init_days` — comma-separated weekday integers (0 = Monday) when forecasts are initialised
+- `start_date` / `end_date` — evaluation period; `start_year_clim` / `end_year_clim` — climatology period
+
+**`romp.yaml`** — Metric definitions and ROMP parameter defaults.
+
+- `metrics.deterministic` / `metrics.probabilistic` — display metadata (label, abbreviation, unit, range, `lower_is_better`, description) for every metric ROMP can produce. Add a new entry here when ROMP gains a new metric; the frontend reads this via `GET /config/metrics`.
+- `defaults` — default values for every optional ROMP `env` parameter (matches `generate_config.py` in the ROMP repo). These serve as documentation and can be used to populate UI forms. Do not duplicate these defaults in frontend code.
 
 ### Frontend (`web/src/`)
 
