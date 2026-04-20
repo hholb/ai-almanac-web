@@ -34,7 +34,7 @@ Three-layer stack with environment-variable-driven backend switching:
 |---|---|---|
 | Frontend | SvelteKit (Vite) at `localhost:5173` | Cloud Run |
 | Backend | FastAPI + uvicorn at `localhost:8000` | Cloud Run |
-| Database | SQLite (`almanac.db`) | Cloud SQL PostgreSQL |
+| Database | PostgreSQL (Docker) | Cloud SQL PostgreSQL |
 | Storage | Local filesystem | Google Cloud Storage |
 | Job runner | Docker (ROMP container) | Modal |
 
@@ -46,57 +46,79 @@ The job runner executes [ROMP](https://github.com/your-org/ROMP) — the benchma
 
 ### Prerequisites
 
-- [uv](https://docs.astral.sh/uv/) — Python package manager
-- Node.js 20+ and npm
-- Docker — to run the ROMP worker container locally
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [uv](https://docs.astral.sh/uv/) — Python package manager (for running scripts outside Docker)
+- Node.js 20+ and npm (for running frontend tooling outside Docker)
 
-### Backend
+### Recommended: Docker Compose
+
+The easiest way to run the full stack locally. Starts a PostgreSQL instance, the FastAPI backend with hot reload, and the Vite dev server — all with source mounted for live editing.
 
 ```bash
+# First time only: copy env files and fill in credentials
+cp .env.example backend/.env
+cp .env.example web/.env
+
+docker compose up --build
+```
+
+Services:
+- Frontend: http://localhost:5173
+- Backend: http://localhost:8000 (docs at `/docs`)
+- PostgreSQL: `localhost:5432` (user: `almanac`, password: `almanac`, db: `almanac`)
+
+The compose file mounts `testdata/` and wires up a **FuXi (Test)** model so you can submit a full end-to-end benchmark without real model data. Regenerate the synthetic test data with:
+
+```bash
+uv run scripts/generate_test_data.py
+```
+
+### Without Docker
+
+Requires a local PostgreSQL instance with the credentials above (or update `DATABASE_URL` in `backend/.env`).
+
+```bash
+# Backend
 cd backend
 uv sync
 uv run uvicorn app.main:app --reload --port 8000
+
+# Frontend (separate terminal)
+cd web
+npm install
+npm run dev
 ```
 
-API available at `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`.
+### Environment Variables
 
-Create `backend/.env` to configure:
+**`backend/.env`** — key settings:
 
 ```env
-# Auth — leave unset to use stub mode (any Bearer token value becomes the user ID)
+# Auth — leave unset for stub mode (any Bearer token value becomes the user ID)
 GLOBUS_CLIENT_ID=
 GLOBUS_CLIENT_SECRET=
+
+# Database — defaults to compose postgres; set a DSN to use a different instance
+DATABASE_URL=postgresql+asyncpg://almanac:almanac@localhost:5432/almanac
 
 # Storage — defaults to local filesystem
 STORAGE_BACKEND=local          # or "gcs"
 UPLOAD_DIR=./uploads
 JOB_OUTPUTS_DIR=./job_outputs
 
-# Job runner — defaults to local Docker
-JOB_RUNNER=docker              # or "cloudrun" or "modal"
+# Job runner
+JOB_RUNNER=docker              # or "batch"
 ROMP_IMAGE=romp:latest
-JOB_TIMEOUT_SECONDS=3600
 
-# Demo observation datasets (comma-separated Name=path or Name=path|file_pattern)
+# Demo observation datasets (comma-separated Name=path)
 DEMO_OBS_DATASETS=
 
-# Model data directories — one per model/region combination.
-# Models with an empty directory are excluded from the registry automatically.
-INDIA_AIFS_MODEL_DIR=
-INDIA_AIFS_DAILY_MODEL_DIR=
-INDIA_IFS_MODEL_DIR=
-INDIA_NEURALGCM_MODEL_DIR=
+# Model data directories — models with an empty dir are excluded from the registry
 INDIA_FUXI_MODEL_DIR=
 INDIA_GRAPHCAST_MODEL_DIR=
-INDIA_GENCAST_MODEL_DIR=
-INDIA_FUXI_S2S_MODEL_DIR=
-ETHIOPIA_AIFS_MODEL_DIR=
-ETHIOPIA_FUXI_MODEL_DIR=
-ETHIOPIA_GRAPHCAST_MODEL_DIR=
-ETHIOPIA_GENCAST_MODEL_DIR=
+# ... (see .env.example for full list)
 
 # Production only
-DATABASE_URL=                  # PostgreSQL DSN (leave unset for SQLite)
 GCS_DATA_BUCKET=
 GCS_UPLOADS_BUCKET=
 GCS_OUTPUTS_BUCKET=
@@ -105,22 +127,22 @@ GCP_REGION=us-central1
 FRONTEND_URL=http://localhost:5173
 ```
 
-### Frontend
-
-```bash
-cd web
-npm install
-cp .env.example .env   # then fill in values
-npm run dev
-```
-
-Dev server at `http://localhost:5173`.
+**`web/.env`** — all values are embedded at build time:
 
 ```env
-# web/.env
 VITE_GLOBUS_CLIENT_ID=<thick-client-uuid>
 VITE_REDIRECT_URL=http://localhost:5173/callback
 VITE_API_URL=http://localhost:8000
+```
+
+### Frontend Commands
+
+```bash
+cd web
+npm run check    # type-check with svelte-check
+npm run lint     # prettier check
+npm run format   # prettier write
+npm run build    # production build
 ```
 
 ---
