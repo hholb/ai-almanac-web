@@ -110,13 +110,14 @@ JOB_OUTPUTS_DIR=./job_outputs
 JOB_RUNNER=docker              # or "batch"
 ROMP_IMAGE=romp:latest
 
-# Demo observation datasets (comma-separated Name=path)
-DEMO_OBS_DATASETS=
+# Demo obs dataset dirs — pattern: {ID}_OBS_DIR (see datasets.yaml for ids)
+TEST_ETHIOPIA_OBS_DIR=
 
-# Model data directories — models with an empty dir are excluded from the registry
+# Model data directories — pattern: {REGION}_{ID}_MODEL_DIR (see models.yaml)
+# Models with an empty or unset dir are excluded from the registry
 INDIA_FUXI_MODEL_DIR=
 INDIA_GRAPHCAST_MODEL_DIR=
-# ... (see .env.example for full list)
+# ... (see backend/.env.example for full list)
 
 # Production only
 GCS_DATA_BUCKET=
@@ -210,11 +211,10 @@ Users are created lazily on first successful login — no separate registration 
 
 ## Adding a New Model
 
-1. Add a `model_dir` env var field to `Settings` in `backend/app/config.py` (e.g. `india_newmodel_model_dir: str = ""`).
-2. Add an entry to `backend/app/config/models.yaml` referencing that setting via `model_dir_setting`.
-3. Add frontend display metadata to `web/src/lib/data/model-catalog.ts`.
+1. Add an entry to `backend/app/config/models.yaml` with `id`, `display_name`, `region`, and other required fields.
+2. Set the env var `{REGION}_{ID}_MODEL_DIR` to the data directory path (local path or GCS URI).
 
-Models with an empty `model_dir` at runtime are automatically excluded from the registry.
+No changes to `config.py` are needed. Models with an unset or empty env var are automatically excluded from the registry.
 
 ---
 

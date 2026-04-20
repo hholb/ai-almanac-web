@@ -93,10 +93,6 @@ if $UPDATE_ENV; then
   echo ""
   echo "==> Updating Cloud Run env vars"
 
-  # DEMO_OBS_DATASETS: comma-separated "Display Name=gs://path[|obs_file_pattern]"
-  # IMD 2p0 files are named data_{year}.nc, Ethiopia uses plain {year}.nc.
-  DEMO_OBS_DATASETS="IMD India (2 deg)=gs://${BUCKET#gs://}/obs/imd-2p0|data_{}.nc,CHIRPS Ethiopia=gs://${BUCKET#gs://}/obs/ethiopia"
-
   gcloud run services update "$SERVICE" \
     --region="$REGION" \
     --update-env-vars "^@^\
@@ -104,7 +100,8 @@ STORAGE_BACKEND=gcs\
 @JOB_RUNNER=batch\
 @GCP_PROJECT=ai-almanac\
 @GCP_REGION=us-central1\
-@DEMO_OBS_DATASETS=${DEMO_OBS_DATASETS}\
+@ETHIOPIA_OBS_DIR=gs://${BUCKET#gs://}/obs/ethiopia\
+@IMD_2P0_OBS_DIR=gs://${BUCKET#gs://}/obs/imd-2p0\
 @INDIA_AIFS_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/aifs\
 @INDIA_AIFS_DAILY_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/aifs_daily\
 @INDIA_FUXI_MODEL_DIR=gs://almanac-data-ai-almanac/models/india/fuxi\

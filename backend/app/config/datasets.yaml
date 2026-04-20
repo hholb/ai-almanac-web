@@ -1,0 +1,23 @@
+# Demo dataset registry
+#
+# Each entry defines a named observational dataset available to all users.
+# The obs_dir path is read from the env var derived from the id:
+#   {ID}_OBS_DIR (uppercased, hyphens → underscores)
+#
+# Example: id "test-ethiopia" → env var TEST_ETHIOPIA_OBS_DIR
+#
+# Entries whose env var is unset or empty are excluded at runtime.
+
+- id: test-ethiopia
+  name: "Test Ethiopia"
+  obs_file_pattern: "{}.nc"
+
+# --- Real benchmark datasets (set the corresponding env vars to enable) ---
+
+- id: ethiopia
+  name: "CHIRPS Ethiopia"
+  obs_file_pattern: "{}.nc"
+
+- id: imd-2p0
+  name: "IMD India (2 deg)"
+  obs_file_pattern: "data_{}.nc"

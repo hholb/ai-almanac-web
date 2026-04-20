@@ -26,8 +26,8 @@ services:
       # All other settings come from backend/.env.
       DATABASE_URL: postgresql+asyncpg://almanac:almanac@db:5432/almanac
       # Synthetic test data for end-to-end smoke testing without real model data.
-      DEMO_OBS_DATASETS: "Test Ethiopia=/testdata/ethiopia/obs"
-      TEST_FUXI_MODEL_DIR: /testdata/ethiopia/fuxi
+      TEST_ETHIOPIA_OBS_DIR: /testdata/ethiopia/obs
+      TEST_FUXI_TEST_MODEL_DIR: /testdata/ethiopia/fuxi
       # Map container-internal paths to host paths for Docker-in-Docker volume mounts.
       DOCKER_PATH_MAP: "/app/job_outputs=${PWD}/backend/job_outputs,/app/uploads=${PWD}/backend/uploads,/testdata=${PWD}/testdata"
     volumes:

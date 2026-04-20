@@ -21,7 +21,7 @@ Services:
 
 Source is volume-mounted into both containers so changes hot-reload without rebuilding.
 
-The compose file automatically mounts `testdata/` and sets `DEMO_OBS_DATASETS` and `TEST_FUXI_MODEL_DIR` to point at it. This wires up the **"FuXi (Test)"** model so you can submit a full end-to-end benchmark job without any real model data. The testdata is synthetic (seeded random rainfall over a 5×5 grid, 1998–2000); regenerate it with:
+The compose file automatically mounts `testdata/` and sets `TEST_ETHIOPIA_OBS_DIR` and `TEST_FUXI_TEST_MODEL_DIR` to point at it. This wires up the **"FuXi (Test)"** model so you can submit a full end-to-end benchmark job without any real model data. The testdata is synthetic (seeded random rainfall over a 5×5 grid, 1998–2000); regenerate it with:
 
 ```bash
 uv run scripts/generate_test_data.py
@@ -84,14 +84,22 @@ These YAML files are the single source of truth for domain configuration. Avoid 
 
 To add a model:
 1. Add an entry with `id`, `display_name`, `region`, `model_type`, and the fields below.
-2. Add a corresponding `<region>_<id>_model_dir` setting to `Settings` in `config.py` and expose it via an env var.
-3. The model is automatically excluded at runtime if its `model_dir_setting` resolves to an empty string.
+2. Set the corresponding env var: `{REGION}_{ID}_MODEL_DIR` (uppercased, hyphens → underscores).
+3. The model is automatically excluded at runtime if the env var is unset or empty.
+
+No changes to `config.py` are needed when adding a model.
 
 Key fields:
-- `model_dir_setting` — name of the `Settings` attribute that holds the data directory path
 - `probabilistic` — set `true` for ensemble models; affects which metrics ROMP computes and Cloud Run resource allocation
 - `init_days` — comma-separated weekday integers (0 = Monday) when forecasts are initialised
 - `start_date` / `end_date` — evaluation period; `start_year_clim` / `end_year_clim` — climatology period
+
+**`datasets.yaml`** — Demo dataset registry. Each entry defines a named observational dataset available to all users.
+
+To add a demo dataset:
+1. Add an entry with `id`, `name`, and optionally `obs_file_pattern`.
+2. Set the corresponding env var: `{ID}_OBS_DIR` (uppercased, hyphens → underscores).
+3. The dataset is automatically excluded if the env var is unset or empty.
 
 **`romp.yaml`** — Metric definitions and ROMP parameter defaults.
 
@@ -115,7 +123,7 @@ Backend `.env` switches:
 - `STORAGE_BACKEND` — `local` (default) or `gcs`
 - `JOB_RUNNER` — `docker` (default) or `batch`
 - `GLOBUS_CLIENT_ID` / `GLOBUS_CLIENT_SECRET` — leave unset for stub auth mode
-- `DEMO_OBS_DATASETS` — comma-separated `Name=path` entries shown to all users
+- `{ID}_OBS_DIR` — obs dir for each dataset entry in `datasets.yaml` (e.g. `TEST_ETHIOPIA_OBS_DIR`)
 
 Frontend `.env` (all `VITE_` prefix, embedded at build time):
 - `VITE_GLOBUS_CLIENT_ID`, `VITE_REDIRECT_URL`, `VITE_API_URL`
