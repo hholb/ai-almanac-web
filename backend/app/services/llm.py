@@ -10,6 +10,7 @@ everything into the prompt. Add new tools to TOOLS and _EXECUTORS.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import AsyncIterator
@@ -221,24 +222,20 @@ and get to the insight.
 # ---------------------------------------------------------------------------
 
 async def _exec_list_jobs(args: dict, user_id: str) -> str:
-    import asyncio
     from ..database import get_db
     from sqlalchemy import text
 
-    def _query():
-        with get_db() as conn:
-            rows = conn.execute(
-                text("""
-                    SELECT id, config_json, status, completed_at, created_at
-                    FROM jobs
-                    WHERE user_id = :uid AND status = 'complete'
-                    ORDER BY completed_at DESC
-                """),
-                {"uid": user_id},
-            ).mappings().fetchall()
-            return [dict(r) for r in rows]
-
-    rows = await asyncio.to_thread(_query)
+    async with get_db() as conn:
+        rows = (await conn.execute(
+            text("""
+                SELECT id, config_json, status, completed_at, created_at
+                FROM jobs
+                WHERE user_id = :uid AND status = 'complete'
+                ORDER BY completed_at DESC
+            """),
+            {"uid": user_id},
+        )).mappings().fetchall()
+        rows = [dict(r) for r in rows]
     jobs = []
     for r in rows:
         cfg = json.loads(r.get("config_json") or "{}")
@@ -253,21 +250,17 @@ async def _exec_list_jobs(args: dict, user_id: str) -> str:
 
 
 async def _exec_get_job_info(args: dict, user_id: str) -> str:
-    import asyncio
     from ..database import get_db
     from sqlalchemy import text
 
     job_id = args["job_id"]
 
-    def _query():
-        with get_db() as conn:
-            row = conn.execute(
-                text("SELECT config_json, status FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user_id},
-            ).mappings().fetchone()
-            return dict(row) if row else None
-
-    row = await asyncio.to_thread(_query)
+    async with get_db() as conn:
+        row = (await conn.execute(
+            text("SELECT config_json, status FROM jobs WHERE id = :id AND user_id = :uid"),
+            {"id": job_id, "uid": user_id},
+        )).mappings().fetchone()
+        row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
     cfg = json.loads(row.get("config_json") or "{}")
@@ -282,7 +275,6 @@ async def _exec_get_job_info(args: dict, user_id: str) -> str:
 
 
 async def _exec_get_job_metrics(args: dict, user_id: str) -> str:
-    import asyncio
     import numpy as np
     from ..database import get_db
     from ..services.storage import get_storage
@@ -290,15 +282,12 @@ async def _exec_get_job_metrics(args: dict, user_id: str) -> str:
 
     job_id = args["job_id"]
 
-    def _check():
-        with get_db() as conn:
-            row = conn.execute(
-                text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user_id},
-            ).mappings().fetchone()
-            return dict(row) if row else None
-
-    row = await asyncio.to_thread(_check)
+    async with get_db() as conn:
+        row = (await conn.execute(
+            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+            {"id": job_id, "uid": user_id},
+        )).mappings().fetchone()
+        row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
     if row["status"] != "complete":
@@ -354,7 +343,6 @@ async def _exec_get_job_metrics(args: dict, user_id: str) -> str:
 
 
 async def _exec_get_spatial_summary(args: dict, user_id: str) -> str:
-    import asyncio
     import numpy as np
     from ..database import get_db
     from ..services.storage import get_storage
@@ -365,15 +353,12 @@ async def _exec_get_spatial_summary(args: dict, user_id: str) -> str:
     window = args["window"]
     metric = args["metric"]
 
-    def _check():
-        with get_db() as conn:
-            row = conn.execute(
-                text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user_id},
-            ).mappings().fetchone()
-            return dict(row) if row else None
-
-    row = await asyncio.to_thread(_check)
+    async with get_db() as conn:
+        row = (await conn.execute(
+            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+            {"id": job_id, "uid": user_id},
+        )).mappings().fetchone()
+        row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
     if row["status"] != "complete":
@@ -460,7 +445,6 @@ async def _exec_run_code_sandbox(args: dict, user_id: str) -> str:
 
 
 async def _exec_run_code(args: dict, user_id: str) -> str:
-    import asyncio
     from ..database import get_db
     from ..services.storage import get_storage
     from sqlalchemy import text
@@ -468,15 +452,12 @@ async def _exec_run_code(args: dict, user_id: str) -> str:
     job_id = args["job_id"]
     code = args["code"]
 
-    def _check():
-        with get_db() as conn:
-            row = conn.execute(
-                text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-                {"id": job_id, "uid": user_id},
-            ).mappings().fetchone()
-            return dict(row) if row else None
-
-    row = await asyncio.to_thread(_check)
+    async with get_db() as conn:
+        row = (await conn.execute(
+            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+            {"id": job_id, "uid": user_id},
+        )).mappings().fetchone()
+        row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
     if row["status"] != "complete":
