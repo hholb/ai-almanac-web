@@ -13,11 +13,25 @@ function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${apiToken.access_token}` };
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, _retry = false): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...authHeaders(), ...init.headers },
   });
+
+  if (res.status === 401 && !_retry) {
+    const manager = getManager();
+    if (manager) {
+      try {
+        await manager.refreshTokens();
+        return request<T>(path, init, true);
+      } catch {
+        await manager.revoke();
+        throw new Error("Session expired — please log in again.");
+      }
+    }
+  }
+
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${init.method ?? "GET"} ${path} failed (${res.status}): ${body}`);
@@ -286,6 +300,44 @@ export type JobGridResponse = {
   unit: string;
   min: number;
   max: number;
+};
+
+export type MetricDefinition = {
+  id: string;
+  label: string;
+  abbreviation: string;
+  unit: string | null;
+  range?: [number, number];
+  lower_is_better?: boolean;
+  description: string;
+};
+
+export type RompDefaults = {
+  obs: string;
+  obs_file_pattern: string;
+  obs_var: string;
+  model_var: string;
+  file_pattern: string;
+  region: string;
+  nc_mask: string | null;
+  thresh_file: string | null;
+  wet_threshold: number;
+  wet_init: number;
+  wet_spell: number;
+  dry_spell: number;
+  dry_extent: number;
+  start_date: string;
+  end_date: string;
+  start_year_clim: number;
+  end_year_clim: number;
+  max_forecast_day: number;
+  probabilistic: boolean;
+  members: string;
+  parallel: boolean;
+  ref_model: string;
+  ref_model_dir: string | null;
+  init_days: string;
+  date_filter_year: number | null;
 };
 
 export async function getJobGrid(

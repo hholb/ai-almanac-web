@@ -18,7 +18,8 @@ export function getManager(): AuthorizationManager | null {
       client,
       redirect,
       storage: localStorage,
-      scopes: "https://auth.globus.org/scopes/50964632-afc7-4d4c-abf4-b288cc18a3af/api",
+      scopes: "https://auth.globus.org/scopes/50964632-afc7-4d4c-abf4-b288cc18a3af/api offline_access",
+      useRefreshTokens: true,
     });
   }
   return _manager;
