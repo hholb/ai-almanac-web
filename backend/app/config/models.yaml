@@ -1,5 +1,26 @@
 # Model registry
 #
+# The test_fuxi entry uses the small synthetic dataset in testdata/ and is
+# excluded in production because test_fuxi_model_dir defaults to "".
+# See scripts/generate_test_data.py to regenerate testdata if needed.
+
+- id: fuxi_test
+  display_name: "FuXi (Test)"
+  region: ethiopia
+  model_type: AIWP
+  model_dir_setting: test_fuxi_model_dir
+  model_var: tp
+  unit_cvt: 1000
+  file_pattern: "{}.nc"
+  probabilistic: false
+  members: null
+  init_days: "2,5"
+  date_filter_year: 1998
+  start_date: "1998-05-01"
+  end_date: "2000-07-31"
+  start_year_clim: 1998
+  end_year_clim: 2000
+#
 # model_dir values are resolved at runtime by substituting the corresponding
 # env var from Settings (e.g. india_aifs_model_dir).  Models whose resolved
 # model_dir is empty are excluded from the registry automatically.

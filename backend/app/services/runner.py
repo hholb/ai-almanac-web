@@ -20,6 +20,23 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _to_host_path(path: str) -> str:
+    """
+    Translate a container-internal path to a host path for Docker volume mounts.
+    Uses the DOCKER_PATH_MAP setting when the backend itself runs in a container.
+    No-op when the setting is empty (backend running directly on the host).
+    """
+    from ..config import settings
+    for entry in settings.docker_path_map.split(","):
+        entry = entry.strip()
+        if "=" not in entry:
+            continue
+        container_prefix, host_prefix = entry.split("=", 1)
+        if path.startswith(container_prefix):
+            return host_prefix + path[len(container_prefix):]
+    return path
+
+
 class JobRunner(ABC):
     @abstractmethod
     def run_job(self, job_id: str, config: dict) -> None:
@@ -81,10 +98,10 @@ class DockerRunner(JobRunner):
         cmd = [
             "docker", "run", "--rm",
             "--name", f"romp-{job_id}",
-            "-v", f"{config['obs_dir']}:/data/obs:ro",
-            "-v", f"{config['model_dir']}:/data/model:ro",
-            "-v", f"{output_dir}:/data/output",
-            "-v", f"{figure_dir}:/data/figure",
+            "-v", f"{_to_host_path(config['obs_dir'])}:/data/obs:ro",
+            "-v", f"{_to_host_path(config['model_dir'])}:/data/model:ro",
+            "-v", f"{_to_host_path(output_dir)}:/data/output",
+            "-v", f"{_to_host_path(figure_dir)}:/data/figure",
             *extra_mounts,
         ]
         for k, v in env.items():
