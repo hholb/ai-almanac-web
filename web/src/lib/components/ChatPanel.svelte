@@ -256,6 +256,7 @@
 <div class="chat-panel">
   <!-- Header with session picker -->
   <div class="chat-header">
+    <span class="ai-badge">✦ AI</span>
     <div class="session-selector">
       <button
         class="session-current"
@@ -410,8 +411,9 @@
     border-radius: 8px;
     overflow: hidden;
     background: var(--color-surface-raised);
-    height: calc(100vh - 12rem);
-    min-height: 480px;
+    flex: 1;
+    min-height: 0;
+    box-shadow: -4px 0 24px rgba(0,0,0,0.12);
   }
 
   .chat-header {
@@ -419,11 +421,24 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
-    padding: 0.6rem 1rem;
+    padding: 0.55rem 0.85rem;
     border-bottom: 1px solid var(--color-border);
-    background: var(--color-surface);
+    background: linear-gradient(90deg, rgba(212,147,63,0.06) 0%, var(--color-surface) 40%);
     flex-shrink: 0;
     position: relative;
+  }
+
+  .ai-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-accent);
+    background: var(--color-accent-light);
+    border: 1px solid var(--color-accent-border);
+    border-radius: 3px;
+    padding: 0.15rem 0.4rem;
+    flex-shrink: 0;
   }
 
   .header-actions {
@@ -624,29 +639,37 @@
   .empty-chat {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.85rem;
     color: var(--color-text-muted);
     font-size: 0.875rem;
+    padding: 0.5rem 0;
   }
 
   .suggestions {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.35rem;
   }
 
   .suggestion {
     text-align: left;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    padding: 0.4rem 0.75rem;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-left: 2px solid var(--color-accent-border);
+    border-radius: 5px;
+    padding: 0.5rem 0.75rem;
     font-size: 0.8rem;
     cursor: pointer;
-    color: var(--color-text);
-    transition: background 0.15s;
+    color: var(--color-text-muted);
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    line-height: 1.4;
   }
-  .suggestion:hover { background: var(--color-border); }
+  .suggestion:hover {
+    background: var(--color-accent-glow);
+    border-color: var(--color-accent-border);
+    border-left-color: var(--color-accent);
+    color: var(--color-text);
+  }
 
   .message {
     max-width: 92%;

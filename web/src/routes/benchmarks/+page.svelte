@@ -12,6 +12,7 @@
   import BenchmarkForm from "./BenchmarkForm.svelte";
 
   const store = new BenchmarkStore();
+  let chatCollapsed = $state(false);
 
   let regions = $state<Region[]>([]);
   let datasets = $state<Dataset[]>([]);
@@ -61,67 +62,84 @@
     {:else if store.selectedGroup}
       <!-- Benchmark Results -->
       {@const group = store.selectedGroup}
-      <header class="detail-header">
-        <div>
-          <p class="detail-eyebrow">Benchmark</p>
-          <h1 class="detail-title">{group.region}</h1>
-          {#if group.startDate && group.endDate}
-            <p class="detail-dates">{group.startDate} – {group.endDate}</p>
-          {/if}
-        </div>
-      </header>
-
-      <div class="model-status-row">
-        {#each group.jobs as job}
-          <div class="model-pill" class:running={job.status === "running"} class:failed={job.status === "failed"} class:complete={job.status === "complete"}>
-            <span class="pill-name">{job.model_name.toUpperCase()}</span>
-            {#if job.status === "running"}
-              <span class="pill-spinner"></span>
-            {:else if job.status === "failed"}
-              <span class="pill-icon fail" title={job.error ?? "Failed"}>✕</span>
-            {:else}
-              <span class="pill-icon ok">✓</span>
-            {/if}
-          </div>
-        {/each}
-      </div>
-
-      <hr class="divider" />
-
       {@const completeJobs = group.jobs.filter((j) => j.status === "complete")}
       {@const failedJobs = group.jobs.filter((j) => j.status === "failed")}
 
-      {#if group.jobs.some((j) => j.status === "running") && completeJobs.length === 0}
-        <div class="running-state">
-          <div class="spinner"></div>
-          <p>Running benchmarks… checking every 3 s</p>
-        </div>
-      {/if}
+      <div class="results-with-chat" class:chat-hidden={chatCollapsed}>
 
-      {#if failedJobs.length > 0}
-        <div class="failed-runs">
-          {#each failedJobs as job}
-            <div class="job-error">
-              <p class="job-error-title">{job.model_name.toUpperCase()} failed</p>
-              {#if job.error}
-                <pre class="job-error-msg">{job.error}</pre>
+        <!-- Left column: header + results -->
+        <div class="results-main">
+          <header class="detail-header">
+            <div>
+              <p class="detail-eyebrow">Benchmark · {group.jobs.length} model{group.jobs.length !== 1 ? 's' : ''}</p>
+              <h1 class="detail-title">{group.region}</h1>
+              {#if group.startDate && group.endDate}
+                <p class="detail-dates">{group.startDate} – {group.endDate}</p>
               {/if}
-              <JobLogs jobId={job.id} />
             </div>
-          {/each}
-        </div>
-      {/if}
+          </header>
 
-      {#if completeJobs.length > 0}
-        <div class="results-with-chat">
-          <div class="results-main">
-            <ResultsViewer jobs={completeJobs} />
+          <div class="model-status-row">
+            {#each group.jobs as job}
+              <div class="model-pill" class:running={job.status === "running"} class:failed={job.status === "failed"} class:complete={job.status === "complete"}>
+                <span class="pill-name">{job.model_name.toUpperCase()}</span>
+                {#if job.status === "running"}
+                  <span class="pill-spinner"></span>
+                {:else if job.status === "failed"}
+                  <span class="pill-icon fail" title={job.error ?? "Failed"}>✕</span>
+                {:else}
+                  <span class="pill-icon ok">✓</span>
+                {/if}
+              </div>
+            {/each}
           </div>
-          <div class="chat-sidebar">
-            <ChatPanel jobs={completeJobs} />
+
+          <hr class="divider" />
+
+          {#if group.jobs.some((j) => j.status === "running") && completeJobs.length === 0}
+            <div class="running-state">
+              <div class="spinner"></div>
+              <p>Running benchmarks… checking every 3 s</p>
+            </div>
+          {/if}
+
+          {#if failedJobs.length > 0}
+            <div class="failed-runs">
+              {#each failedJobs as job}
+                <div class="job-error">
+                  <p class="job-error-title">{job.model_name.toUpperCase()} failed</p>
+                  {#if job.error}
+                    <pre class="job-error-msg">{job.error}</pre>
+                  {/if}
+                  <JobLogs jobId={job.id} />
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if completeJobs.length > 0}
+            <ResultsViewer jobs={completeJobs} />
+          {/if}
+        </div>
+
+        <!-- Right column: chat panel (full height from top of content) -->
+        <div class="chat-sidebar" class:collapsed={chatCollapsed}>
+          <div class="chat-panel-wrap">
+            <button
+              class="chat-toggle-btn"
+              onclick={() => { chatCollapsed = !chatCollapsed; }}
+              title={chatCollapsed ? "Show AI analysis" : "Hide AI analysis"}
+            >
+              <span class="toggle-icon">✦</span>
+              <span class="toggle-label">{chatCollapsed ? "AI Analysis" : "Hide"}</span>
+            </button>
+            {#if !chatCollapsed}
+              <ChatPanel jobs={completeJobs} />
+            {/if}
           </div>
         </div>
-      {/if}
+
+      </div>
 
     {:else}
       <div class="empty-state">
@@ -140,7 +158,7 @@
     min-height: calc(100vh - 3.5rem);
     max-width: 1800px;
     margin: 0 auto;
-    padding: 2rem 1.75rem;
+    padding: 1rem 1.75rem;
     gap: 1.5rem;
     align-items: flex-start;
   }
@@ -156,7 +174,7 @@
 
   .results-with-chat {
     display: flex;
-    gap: 1.25rem;
+    gap: 0;
     align-items: flex-start;
   }
 
@@ -164,13 +182,77 @@
     flex: 3;
     min-width: 0;
     min-width: 520px;
+    padding-right: 1.25rem;
   }
 
   .chat-sidebar {
     flex: 2;
-    min-width: 380px;
+    min-width: 400px;
     position: sticky;
-    top: 1rem;
+    /* nav (3.5rem) + page padding (2rem) + main-content padding (1.5rem) = 7rem;
+       subtract a little so it doesn't kiss the nav */
+    top: calc(3.5rem + 0.5rem);
+    height: calc(100vh - 3.5rem - 1rem);
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--color-border-subtle);
+    padding-left: 1.25rem;
+  }
+
+  .chat-sidebar.collapsed {
+    flex: none;
+    min-width: unset;
+    height: auto;
+    border-left: none;
+    padding-left: 0;
+  }
+
+  .chat-panel-wrap {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .chat-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.6rem 0.3rem 0.5rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    color: var(--color-text-muted);
+    font-size: 0.7rem;
+    font-weight: 600;
+    font-family: var(--font-body);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+    align-self: flex-start;
+    margin-bottom: 0.6rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .chat-toggle-btn:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-glow);
+  }
+  .toggle-icon {
+    color: var(--color-accent);
+    font-size: 0.6rem;
+    line-height: 1;
+  }
+  .toggle-label {
+    letter-spacing: 0.08em;
+  }
+  .chat-sidebar.collapsed .chat-toggle-btn {
+    margin-bottom: 0;
+  }
+
+  .results-with-chat .chat-panel-wrap > :global(.chat-panel) {
+    flex: 1;
+    min-width: 0;
   }
 
   /* ---- Results header ---- */
