@@ -178,7 +178,10 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
             data = json.loads(event)
             if data["type"] == "done":
                 final_messages = data.get("messages")
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                # Include messages in the done event so the client can reliably
+                # extract code snippets from the assembled tool_calls.
+                visible = [m for m in (final_messages or []) if m.get("role") != "system"]
+                yield f"data: {json.dumps({'type': 'done', 'messages': visible})}\n\n"
             else:
                 yield f"data: {event}\n\n"
 

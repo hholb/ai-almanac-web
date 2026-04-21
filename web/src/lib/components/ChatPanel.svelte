@@ -37,19 +37,19 @@
   // Streaming assistant turn
   let streamingContent = $state("");
   let activeToolCalls = $state<{ name: string; done: boolean; code?: string }[]>([]);
-  let expandedCode = $state<Set<string>>(new Set());
+  let shownCode = $state<Set<string>>(new Set());
+
+  function toggleCode(key: string) {
+    const next = new Set(shownCode);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    shownCode = next;
+  }
 
   // Code snippets collected this turn — appended to messages on done so they persist.
   let pendingSnippets = $state<{ name: string; code: string }[]>([]);
 
   const CODE_TOOLS = new Set(["run_code_sandbox", "run_code"]);
-
-  function toggleCode(key: string) {
-    const next = new Set(expandedCode);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    expandedCode = next;
-  }
 
   async function copyCode(code: string) {
     await navigator.clipboard.writeText(code);
@@ -192,10 +192,29 @@
             tc.name === event.name && !tc.done ? { ...tc, done: true } : tc
           );
         } else if (event.type === "done") {
-          // Persist snippets as a synthetic message so they survive in the message list.
-          const snippetsToAdd = pendingSnippets;
-          if (snippetsToAdd.length > 0) {
-            messages = [...messages, { role: "assistant", content: "", tool_calls: snippetsToAdd.map((s, i) => ({
+          // Extract code snippets from the authoritative done.messages payload.
+          // This is more reliable than pendingSnippets which depends on tool_call
+          // events having correctly-parsed input.
+          const doneSnippets: { name: string; code: string }[] = [];
+          if (event.messages) {
+            for (const m of event.messages) {
+              if (m.role === "assistant" && m.tool_calls) {
+                for (const tc of m.tool_calls) {
+                  if (CODE_TOOLS.has(tc.function.name)) {
+                    try {
+                      const args = JSON.parse(tc.function.arguments);
+                      if (args.code) doneSnippets.push({ name: tc.function.name, code: args.code });
+                    } catch { /* skip malformed */ }
+                  }
+                }
+              }
+            }
+          } else {
+            // Fallback: use pendingSnippets if done.messages not available
+            doneSnippets.push(...pendingSnippets);
+          }
+          if (doneSnippets.length > 0) {
+            messages = [...messages, { role: "assistant", content: "", tool_calls: doneSnippets.map((s, i) => ({
               id: `local-${i}`, type: "function",
               function: { name: s.name, arguments: JSON.stringify({ code: s.code }) }
             })) }];
@@ -344,11 +363,11 @@
               <div class="code-snippet-actions">
                 <button class="code-action-btn" onclick={() => copyCode(snippet.code)}>Copy</button>
                 <button class="code-action-btn" onclick={() => toggleCode(key)}>
-                  {expandedCode.has(key) ? "Hide" : "Show"} code
+                  {shownCode.has(key) ? "Hide code" : "Show code"}
                 </button>
               </div>
             </div>
-            {#if expandedCode.has(key)}
+            {#if shownCode.has(key)}
               <pre class="code-block"><code>{snippet.code}</code></pre>
             {/if}
           </div>
@@ -744,7 +763,6 @@
   .code-snippet {
     border: 1px solid var(--color-border);
     border-radius: 6px;
-    overflow: hidden;
     font-size: 0.78rem;
   }
 
@@ -754,6 +772,7 @@
     justify-content: space-between;
     padding: 0.35rem 0.65rem;
     background: var(--color-surface);
+    border-radius: 6px;
     gap: 0.5rem;
   }
 

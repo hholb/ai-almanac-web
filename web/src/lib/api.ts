@@ -372,7 +372,7 @@ export type ChatEvent =
   | { type: "text"; content: string }
   | { type: "tool_call"; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; name: string; content: string }
-  | { type: "done" };
+  | { type: "done"; messages?: ChatMessage[] };
 
 export async function createChatSession(
   jobIds: string[] = [],
