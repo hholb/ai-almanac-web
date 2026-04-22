@@ -19,6 +19,43 @@ from pathlib import Path
 # HDF5/NetCDF4 is not thread-safe. Serialize all dataset opens with this lock.
 _nc_lock = threading.Lock()
 
+_CHAT_FIGURE_FORMATS: tuple[tuple[bytes, str, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", ".png", "image/png"),
+    (b"RIFF", ".webp", "image/webp"),
+    (b"\xff\xd8\xff", ".jpg", "image/jpeg"),
+    (b"GIF87a", ".gif", "image/gif"),
+    (b"GIF89a", ".gif", "image/gif"),
+)
+
+
+def detect_chat_figure_format(data: bytes) -> tuple[str, str]:
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp", "image/webp"
+    for magic, ext, content_type in _CHAT_FIGURE_FORMATS:
+        if data.startswith(magic):
+            return ext, content_type
+    return ".bin", "application/octet-stream"
+
+
+def guess_chat_figure_media_type(path: Path) -> str:
+    try:
+        return detect_chat_figure_format(path.read_bytes())[1]
+    except Exception:
+        if path.suffix == ".png":
+            return "image/png"
+        if path.suffix in (".jpg", ".jpeg"):
+            return "image/jpeg"
+        if path.suffix == ".gif":
+            return "image/gif"
+        return "image/webp"
+
+
+def _chat_figure_candidates(base: Path, figure_id: str) -> list[Path]:
+    return [
+        base / "chat-figures" / f"{figure_id}{ext}"
+        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
+    ]
+
 
 class StorageBackend(ABC):
     @abstractmethod
@@ -77,6 +114,18 @@ class StorageBackend(ABC):
     @abstractmethod
     def open_nc_dataset(self, path):
         """Open a NetCDF path/URI and return an xarray Dataset."""
+
+    @abstractmethod
+    def save_chat_figure(self, figure_id: str, data: bytes) -> None:
+        """Persist a chat figure by ID."""
+
+    @abstractmethod
+    def chat_figure_local_path(self, figure_id: str) -> Path | None:
+        """Return a local Path to serve via FileResponse, or None for GCS."""
+
+    @abstractmethod
+    def chat_figure_redirect_url(self, figure_id: str) -> str | None:
+        """Return a signed GCS URL to redirect to, or None for local storage."""
 
     @property
     def is_local(self) -> bool:
@@ -144,6 +193,21 @@ class LocalStorage(StorageBackend):
         import xarray as xr
         with _nc_lock:
             return xr.load_dataset(path)
+
+    def save_chat_figure(self, figure_id: str, data: bytes) -> None:
+        ext, _ = detect_chat_figure_format(data)
+        path = self._outputs_dir / "chat-figures" / f"{figure_id}{ext}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def chat_figure_local_path(self, figure_id: str) -> Path | None:
+        for candidate in _chat_figure_candidates(self._outputs_dir, figure_id):
+            if candidate.exists():
+                return candidate
+        return self._outputs_dir / "chat-figures" / f"{figure_id}.webp"
+
+    def chat_figure_redirect_url(self, figure_id: str) -> str | None:
+        return None
 
     def log_path(self, job_id: str) -> Path:
         p = self._outputs_dir / job_id / "run.log"
@@ -244,6 +308,25 @@ class GCSStorage(StorageBackend):
         fs = gcsfs.GCSFileSystem()
         with fs.open(str(path).removeprefix("gs://"), "rb") as f:
             return xr.load_dataset(f, engine="h5netcdf")
+
+    def save_chat_figure(self, figure_id: str, data: bytes) -> None:
+        ext, content_type = detect_chat_figure_format(data)
+        blob = self._bucket(self._outputs_bucket).blob(f"chat-figures/{figure_id}{ext}")
+        blob.upload_from_string(data, content_type=content_type)
+
+    def chat_figure_local_path(self, figure_id: str) -> Path | None:
+        return None
+
+    def chat_figure_redirect_url(self, figure_id: str) -> str | None:
+        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin"):
+            blob = self._bucket(self._outputs_bucket).blob(f"chat-figures/{figure_id}{ext}")
+            if blob.exists():
+                return blob.generate_signed_url(
+                    version="v4",
+                    expiration=self._SIGNED_URL_EXPIRY,
+                    method="GET",
+                )
+        return None
 
     def read_log(self, job_id: str) -> str:
         blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/run.log")

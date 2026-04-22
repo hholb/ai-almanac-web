@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_model: str = "claude-sonnet-4-6"
     llm_api_key: str = "placeholder"
+    chat_figure_signing_secret: str = "dev-chat-figure-secret"
 
     # ---------------------------------------------------------------------------
     # Auth
