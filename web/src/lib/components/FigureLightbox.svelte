@@ -13,6 +13,17 @@
   function prev() { if (index > 0) index--; }
   function next() { if (index < figures.length - 1) index++; }
 
+  async function download() {
+    const fig = figures[index];
+    if (!fig) return;
+    const { fetchResultBlob } = await import("$lib/benchmarks.svelte");
+    const src = await fetchResultBlob(fig.raw.url);
+    const a = document.createElement("a");
+    a.href = src;
+    a.download = fig.label.replace(/\s+/g, "_") + ".png";
+    a.click();
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onclose();
     if (e.key === "ArrowLeft") prev();
@@ -20,8 +31,19 @@
   }
 
   $effect(() => {
+    const fullscreenMaps = [...document.querySelectorAll(".map-root.fullscreen")];
+    document.body.classList.add("figure-lightbox-open");
+    for (const el of fullscreenMaps) {
+      el.classList.add("obscured-by-lightbox");
+    }
     document.addEventListener("keydown", onkeydown);
-    return () => document.removeEventListener("keydown", onkeydown);
+    return () => {
+      document.body.classList.remove("figure-lightbox-open");
+      for (const el of fullscreenMaps) {
+        el.classList.remove("obscured-by-lightbox");
+      }
+      document.removeEventListener("keydown", onkeydown);
+    };
   });
 </script>
 
@@ -29,6 +51,7 @@
 <div class="overlay" onclick={onclose}>
   <div class="box" onclick={(e) => e.stopPropagation()}>
     <button class="close" onclick={onclose} aria-label="Close">&times;</button>
+    <button class="download" onclick={download} aria-label="Download" title="Download figure">&#x2B07;</button>
 
     {#if figures[index]}
       {@const fig = figures[index]}
@@ -46,7 +69,7 @@
 
     <div class="nav">
       <button onclick={prev} disabled={index === 0}>&#8592; Prev</button>
-      <span>{index + 1} / {figures.length}</span>
+      <span class="nav-counter">{index + 1} <span class="nav-of">of</span> {figures.length}</span>
       <button onclick={next} disabled={index === figures.length - 1}>Next &#8594;</button>
     </div>
   </div>
@@ -56,7 +79,7 @@
   .overlay {
     position: fixed;
     inset: 0;
-    z-index: 1000;
+    z-index: 2000;
     background: rgba(0, 0, 0, 0.85);
     display: flex;
     align-items: center;
@@ -78,13 +101,12 @@
     overflow: hidden;
   }
 
-  .close {
+  .close,
+  .download {
     position: absolute;
     top: 0.5rem;
-    right: 0.75rem;
     background: none;
     border: none;
-    font-size: 1.5rem;
     line-height: 1;
     cursor: pointer;
     color: var(--color-text-dim);
@@ -93,7 +115,25 @@
     transition: color 0.12s, background-color 0.12s;
   }
 
-  .close:hover { color: var(--color-text); background: var(--color-border-subtle); }
+  .close { right: 0.75rem; font-size: 1.5rem; }
+  .download { right: 2.75rem; font-size: 1.1rem; }
+
+  .close:hover,
+  .download:hover { color: var(--color-text); background: var(--color-border-subtle); }
+
+  .nav-counter {
+    font-weight: 600;
+    color: var(--color-text);
+    font-size: 0.85rem;
+    min-width: 4rem;
+    text-align: center;
+  }
+
+  .nav-of {
+    font-weight: 400;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+  }
 
   .img-wrap {
     overflow: auto;

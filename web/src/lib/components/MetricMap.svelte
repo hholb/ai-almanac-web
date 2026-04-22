@@ -596,8 +596,12 @@
     height: 100dvh;
     width: 100dvw;
     border-radius: 0;
-    z-index: 9999;
+    z-index: 900;
     border: none;
+  }
+
+  :global(.map-root.fullscreen.obscured-by-lightbox) {
+    z-index: 1;
   }
 
   .map-instance { width: 100%; height: 100%; }
@@ -614,7 +618,7 @@
     top: 1rem;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 1000;
+    z-index: 20;
     padding: 0.4rem 1rem;
     border-radius: 2rem;
     font-size: 0.78rem;
@@ -630,7 +634,7 @@
     position: absolute;
     bottom: 1.5rem;
     left: 0.75rem;
-    z-index: 1000;
+    z-index: 20;
     width: 2rem;
     height: 2rem;
     background: rgba(255,255,255,0.9);
@@ -652,7 +656,7 @@
     position: absolute;
     top: 0.75rem;
     right: 0.75rem;
-    z-index: 1000;
+    z-index: 20;
     background: rgba(255,255,255,0.96);
     border: 1px solid #ccc;
     border-radius: 0.4rem;
@@ -830,7 +834,7 @@
   /* ---- Tooltip ---- */
   .tooltip {
     position: absolute;
-    z-index: 1000;
+    z-index: 30;
     background: white;
     border: 1px solid #ccc;
     border-radius: 0.3rem;
@@ -878,7 +882,7 @@
     position: absolute;
     bottom: 1.5rem;
     right: 1.5rem;
-    z-index: 1000;
+    z-index: 20;
     background: rgba(255,255,255,0.92);
     padding: 0.6rem 0.75rem;
     border-radius: 0.4rem;
@@ -888,6 +892,22 @@
     display: flex;
     flex-direction: column;
     gap: 0.1rem;
+  }
+
+  :global(body.figure-lightbox-open) .map-root .layer-panel,
+  :global(body.figure-lightbox-open) .map-root .legend,
+  :global(body.figure-lightbox-open) .map-root .fullscreen-btn,
+  :global(body.figure-lightbox-open) .map-root .status-overlay,
+  :global(body.figure-lightbox-open) .map-root .tooltip {
+    display: none;
+  }
+
+  :global(.map-root.fullscreen.obscured-by-lightbox .layer-panel),
+  :global(.map-root.fullscreen.obscured-by-lightbox .legend),
+  :global(.map-root.fullscreen.obscured-by-lightbox .fullscreen-btn),
+  :global(.map-root.fullscreen.obscured-by-lightbox .status-overlay),
+  :global(.map-root.fullscreen.obscured-by-lightbox .tooltip) {
+    display: none;
   }
   .legend-title {
     font-size: 0.6rem;

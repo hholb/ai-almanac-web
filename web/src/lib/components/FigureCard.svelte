@@ -9,6 +9,14 @@
 
   let { figure, onclick }: Props = $props();
 
+  async function download() {
+    const src = await fetchResultBlob(figure.raw.url);
+    const a = document.createElement("a");
+    a.href = src;
+    a.download = figure.label.replace(/\s+/g, "_") + ".png";
+    a.click();
+  }
+
   const WINDOW_LABELS: Record<string, string> = { "1-15": "Days 1–15", "16-30": "Days 16–30" };
 </script>
 
@@ -31,7 +39,13 @@
       <div class="loading">Loading…</div>
     {:then src}
       <img {src} alt={figure.label} />
-      <div class="expand-hint">&#x26F6; Expand</div>
+      <div class="hover-actions">
+        <div class="expand-hint">&#x26F6; Expand</div>
+        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+        <div class="download-btn" onclick={(e) => { e.stopPropagation(); download(); }} title="Download">
+          &#x2B07;
+        </div>
+      </div>
     {:catch}
       <div class="loading">Failed to load image.</div>
     {/await}
@@ -93,21 +107,33 @@
     display: block;
   }
 
-  .expand-hint {
+  .hover-actions {
     position: absolute;
     bottom: 0.5rem;
     right: 0.5rem;
+    display: flex;
+    gap: 0.3rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .img-wrap:hover .hover-actions { opacity: 1; }
+
+  .expand-hint,
+  .download-btn {
     background: rgba(0, 0, 0, 0.55);
     color: #fff;
     font-size: 0.65rem;
     padding: 0.2rem 0.45rem;
     border-radius: 0.25rem;
-    opacity: 0;
-    transition: opacity 0.15s;
-    pointer-events: none;
   }
 
-  .img-wrap:hover .expand-hint { opacity: 1; }
+  .download-btn {
+    cursor: pointer;
+    pointer-events: all;
+  }
+
+  .download-btn:hover { background: rgba(0, 0, 0, 0.8); }
 
   .loading {
     padding: 2rem;
