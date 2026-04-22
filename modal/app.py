@@ -23,6 +23,128 @@ import modal
 app = modal.App("almanac-romp")
 
 
+def _media_type_for_filename(filename: str) -> str:
+    lower = filename.lower()
+    if lower.endswith(".webp"):
+        return "image/webp"
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        return "image/jpeg"
+    if lower.endswith(".gif"):
+        return "image/gif"
+    return "application/octet-stream"
+
+
+def _build_runner_script(code: str, compute_call: str) -> str:
+    return f"""\
+import json
+import os
+import traceback
+from pathlib import Path
+
+ARTIFACT_DIR = Path(os.environ["ARTIFACT_DIR"])
+ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+
+def media_type_for_filename(filename: str) -> str:
+    lower = filename.lower()
+    if lower.endswith(".webp"):
+        return "image/webp"
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        return "image/jpeg"
+    if lower.endswith(".gif"):
+        return "image/gif"
+    return "application/octet-stream"
+
+def save_figure(fig, filename="figure.webp", format=None, label=None, **savefig_kwargs):
+    if format is None:
+        suffix = Path(filename).suffix.lower()
+        format = suffix.lstrip(".") if suffix else "webp"
+    path = ARTIFACT_DIR / filename
+    defaults = {{"dpi": 150, "bbox_inches": "tight"}}
+    defaults.update(savefig_kwargs)
+    fig.savefig(path, format=format, **defaults)
+    return {{
+        "kind": "figure",
+        "filename": filename,
+        "label": label,
+        "media_type": media_type_for_filename(filename),
+    }}
+
+{code}
+
+try:
+    result = {compute_call}
+    if not isinstance(result, dict):
+        result = {{"value": result}}
+    artifacts = []
+    if isinstance(result.get("artifacts"), list):
+        artifacts.extend(result.pop("artifacts"))
+    forbidden_keys = {{"image", "image_data", "figure", "figure_data"}}
+    bad_keys = sorted(key for key in result.keys() if key in forbidden_keys)
+    if bad_keys:
+        raise ValueError(
+            "Do not return base64 or inline image data. "
+            "Use save_figure(...) and return the artifact under 'artifacts'. "
+            f"Forbidden keys: {{', '.join(bad_keys)}}"
+        )
+    print(json.dumps({{"ok": True, "result": result, "artifacts": artifacts}}))
+except Exception as exc:
+    print(json.dumps({{"ok": False, "error": str(exc), "traceback": traceback.format_exc()}}))
+"""
+
+
+def _run_generated_code(code: str, compute_call: str, extra_env: dict[str, str] | None = None, timeout: int = 90) -> dict:
+    import json as _json
+
+    artifact_dir = Path(tempfile.mkdtemp(prefix="chat-artifacts-"))
+    runner_script = _build_runner_script(code, compute_call)
+    env = dict(os.environ)
+    env["ARTIFACT_DIR"] = str(artifact_dir)
+    if extra_env:
+        env.update(extra_env)
+
+    proc = subprocess.run(
+        ["python", "-c", runner_script],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
+    if not stdout.strip():
+        return {"ok": False, "error": stderr or "Generated code produced no output"}
+
+    try:
+        payload = _json.loads(stdout.strip())
+    except _json.JSONDecodeError:
+        return {"ok": False, "error": f"Non-JSON output: {stdout[:500]}", "stderr": stderr[:500]}
+
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "Generated code returned an invalid payload"}
+    if not payload.get("ok"):
+        return payload
+
+    enriched_artifacts = []
+    for artifact in payload.get("artifacts", []):
+        filename = artifact.get("filename")
+        if not filename:
+            continue
+        path = artifact_dir / filename
+        if not path.exists():
+            return {"ok": False, "error": f"Artifact file not found: {filename}"}
+        enriched_artifacts.append({
+            **artifact,
+            "data": path.read_bytes(),
+            "media_type": artifact.get("media_type") or _media_type_for_filename(filename),
+        })
+    payload["artifacts"] = enriched_artifacts
+    return payload
+
+
 @app.local_entrypoint()
 def test(job_id: str, config_json: str, outputs_bucket: str):
     """CLI smoke-test entry: modal run modal/app.py --job-id=x --config-json='{...}' --outputs-bucket=y"""
@@ -190,7 +312,7 @@ def run_romp(job_id: str, config: dict, outputs_bucket: str) -> None:
 # Minimal image for sandboxed code: scientific Python stack only, no GCS credentials.
 _sandbox_image = (
     modal.Image.debian_slim()
-    .pip_install("xarray", "numpy", "h5netcdf", "scipy", "pandas")
+    .pip_install("xarray", "numpy", "h5netcdf", "scipy", "pandas", "matplotlib", "Pillow")
 )
 
 
@@ -208,43 +330,11 @@ def run_code_sandbox(code: str) -> dict:
         def compute() -> dict:
             ...
 
-    Returns {"ok": true, "result": {...}} or {"ok": false, "error": "..."}.
-    Available libraries: xarray, numpy, scipy, pandas.
+    Returns {"ok": true, "result": {...}, "artifacts": [...]} or
+    {"ok": false, "error": "..."}.
+    Available libraries: xarray, numpy, scipy, pandas, matplotlib.
     """
-    import json as _json
-
-    runner_script = f"""\
-import json
-
-{code}
-
-try:
-    result = compute()
-    if not isinstance(result, dict):
-        result = {{"value": result}}
-    print(json.dumps({{"ok": True, "result": result}}))
-except Exception as exc:
-    import traceback
-    print(json.dumps({{"ok": False, "error": str(exc), "traceback": traceback.format_exc()}}))
-"""
-
-    sb = modal.Sandbox.create(
-        "python", "-c", runner_script,
-        image=_sandbox_image,
-        timeout=90,
-        block_network=True,
-    )
-    sb.wait()
-    stdout = sb.stdout.read()
-    stderr = sb.stderr.read()
-
-    if not stdout.strip():
-        return {"ok": False, "error": stderr or "Sandbox produced no output"}
-
-    try:
-        return _json.loads(stdout.strip())
-    except _json.JSONDecodeError:
-        return {"ok": False, "error": f"Non-JSON output: {stdout[:500]}"}
+    return _run_generated_code(code, "compute()", timeout=90)
 
 
 @app.function(
@@ -263,81 +353,57 @@ def run_code(job_id: str, outputs_bucket: str, code: str) -> dict:
         def compute(nc_dir: str) -> dict:
             ...
 
-    Returns {"ok": true, "result": {...}} or {"ok": false, "error": "..."}.
+    Returns {"ok": true, "result": {...}, "artifacts": [...]} or
+    {"ok": false, "error": "..."}.
     """
-    import json as _json
-
     from google.cloud import storage as gcs
     from google.cloud.storage import transfer_manager
 
-    # Authenticate
+    # Authenticate — write SA key to a temp file for the GCS client, then
+    # remove it before running user code so the subprocess can't read it.
     sa_json = os.environ["SERVICE_ACCOUNT_JSON"]
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        f.write(sa_json)
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = f.name
-
-    # Download all NC files from gs://{outputs_bucket}/{job_id}/output/
-    client = gcs.Client()
-    bucket = client.bucket(outputs_bucket)
-    prefix = f"{job_id}/output/"
-    nc_names = [
-        blob.name[len(prefix):]
-        for blob in client.list_blobs(outputs_bucket, prefix=prefix)
-        if blob.name.endswith(".nc")
-    ]
-
-    local_nc = Path("/tmp/sandbox_nc")
-    local_nc.mkdir(parents=True, exist_ok=True)
-
-    if nc_names:
-        results = transfer_manager.download_many_to_path(
-            bucket, nc_names, str(local_nc), blob_name_prefix=prefix, worker_type="thread",
-        )
-        for name, result in zip(nc_names, results):
-            if isinstance(result, Exception):
-                return {"ok": False, "error": f"Failed to download {name}: {result}"}
-
-    if not nc_names:
-        return {"ok": False, "error": "No NC output files found for this job"}
-
-    # Build the script that will run inside the sandbox.
-    # NC files are mounted at /data inside the sandbox.
-    runner_script = f"""\
-import json, sys
-from pathlib import Path
-
-{code}
-
-try:
-    result = compute("/data")
-    if not isinstance(result, dict):
-        result = {{"value": result}}
-    print(json.dumps({{"ok": True, "result": result}}))
-except Exception as exc:
-    print(json.dumps({{"ok": False, "error": str(exc)}}))
-"""
-
-    # Use an ephemeral volume to share NC files with the sandbox.
-    with modal.Volume.ephemeral() as vol:
-        with vol.batch_upload() as uploader:
-            for nc_file in local_nc.iterdir():
-                uploader.put_file(str(nc_file), nc_file.name)
-
-        sb = modal.Sandbox.create(
-            "python", "-c", runner_script,
-            image=_sandbox_image,
-            volumes={"/data": vol},
-            timeout=120,
-            block_network=True,  # generated code cannot exfiltrate data
-        )
-        sb.wait()
-        stdout = sb.stdout.read()
-        stderr = sb.stderr.read()
-
-    if not stdout.strip():
-        return {"ok": False, "error": stderr or "Sandbox produced no output"}
-
+    sa_key_path = None
     try:
-        return _json.loads(stdout.strip())
-    except _json.JSONDecodeError:
-        return {"ok": False, "error": f"Non-JSON output: {stdout[:500]}"}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(sa_json)
+            sa_key_path = f.name
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
+
+        client = gcs.Client()
+        bucket = client.bucket(outputs_bucket)
+        prefix = f"{job_id}/output/"
+        nc_names = [
+            blob.name[len(prefix):]
+            for blob in client.list_blobs(outputs_bucket, prefix=prefix)
+            if blob.name.endswith(".nc")
+        ]
+
+        local_nc = Path("/tmp/sandbox_nc")
+        local_nc.mkdir(parents=True, exist_ok=True)
+
+        if nc_names:
+            results = transfer_manager.download_many_to_path(
+                bucket, nc_names, str(local_nc), blob_name_prefix=prefix, worker_type="thread",
+            )
+            for name, result in zip(nc_names, results):
+                if isinstance(result, Exception):
+                    return {"ok": False, "error": f"Failed to download {name}: {result}"}
+
+        if not nc_names:
+            return {"ok": False, "error": "No NC output files found for this job"}
+    finally:
+        # Remove credentials from disk and environment before executing user code.
+        if sa_key_path:
+            Path(sa_key_path).unlink(missing_ok=True)
+        os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+
+    env = {
+        k: v for k, v in os.environ.items()
+        if k not in {"GOOGLE_APPLICATION_CREDENTIALS", "SERVICE_ACCOUNT_JSON"}
+    }
+    return _run_generated_code(
+        code,
+        f'compute({str(local_nc)!r})',
+        extra_env=env,
+        timeout=120,
+    )
