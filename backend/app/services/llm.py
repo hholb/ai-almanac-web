@@ -13,9 +13,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+from dataclasses import dataclass, field
 from typing import AsyncIterator
 
+import sqlalchemy as sa
+
+from .chat_artifacts import create_chat_figure_artifact
+from .chat_state import ChatScope, ChatToolCall, ChatTurn, new_turn_id, utc_now
+
 logger = logging.getLogger(__name__)
+_SANDBOX_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(sandbox:[^)]+\)")
+
+
+@dataclass
+class ToolExecutionResult:
+    content: str
+    parsed: object = None
+    artifacts: list = field(default_factory=list)
 
 # ---------------------------------------------------------------------------
 # Tool definitions (OpenAI function-calling schema)
@@ -104,7 +119,24 @@ TOOLS: list[dict] = [
                 "Use this for general computation — statistics, simulations, cross-tabulations — "
                 "when you don't need job NC files. "
                 "You must define a function `def compute() -> dict` that returns a JSON-serialisable dict. "
-                "Available libraries: xarray, numpy, scipy, pandas."
+                "Available libraries: xarray, numpy, scipy, pandas, matplotlib.\n\n"
+                "To produce a plot, use matplotlib with the Agg backend and the provided "
+                "`save_figure(fig, filename='figure.webp', format='webp')` helper. "
+                "Do not use BytesIO, base64, `fig.savefig` to a buffer, or return keys like "
+                "`image`, `image_data`, `figure`, or `figure_data`. "
+                "Return artifact metadata under an `artifacts` key:\n"
+                "```python\n"
+                "import matplotlib\n"
+                "matplotlib.use('Agg')\n"
+                "import matplotlib.pyplot as plt\n"
+                "\n"
+                "def compute() -> dict:\n"
+                "    fig, ax = plt.subplots()\n"
+                "    ax.plot([1, 2, 3], [4, 5, 6])\n"
+                "    artifact = save_figure(fig, filename='plot.webp', format='webp')\n"
+                "    plt.close(fig)\n"
+                "    return {'artifacts': [artifact]}\n"
+                "```"
             ),
             "parameters": {
                 "type": "object",
@@ -113,12 +145,9 @@ TOOLS: list[dict] = [
                         "type": "string",
                         "description": (
                             "Python source defining `def compute() -> dict`. "
-                            "Must be self-contained. Example:\n"
-                            "```python\n"
-                            "import numpy as np\n\n"
-                            "def compute() -> dict:\n"
-                            "    return {'mean': float(np.mean([1, 2, 3]))}\n"
-                            "```"
+                            "Must be self-contained. To return a plot, use save_figure(...) and "
+                            "return the resulting metadata under an 'artifacts' key. Do not "
+                            "encode images manually or return base64/image_data fields."
                         ),
                     },
                 },
@@ -137,7 +166,25 @@ TOOLS: list[dict] = [
                 "The code runs in an isolated sandbox with no network access. "
                 "You must define a function `def compute(nc_dir: str) -> dict` that opens the "
                 "NC files in `nc_dir` using xarray/numpy and returns a JSON-serialisable dict. "
-                "Available libraries: xarray, numpy, scipy, pandas, h5netcdf. "
+                "Available libraries: xarray, numpy, scipy, pandas, h5netcdf, matplotlib.\n\n"
+                "To produce a plot, use matplotlib with the Agg backend and the provided "
+                "`save_figure(fig, filename='figure.webp', format='webp')` helper. "
+                "Do not use BytesIO, base64, `fig.savefig` to a buffer, or return keys like "
+                "`image`, `image_data`, `figure`, or `figure_data`. "
+                "Return artifact metadata under an `artifacts` key:\n"
+                "```python\n"
+                "import matplotlib\n"
+                "matplotlib.use('Agg')\n"
+                "import matplotlib.pyplot as plt\n"
+                "\n"
+                "def compute(nc_dir: str) -> dict:\n"
+                "    # ... load data from nc_dir ...\n"
+                "    fig, ax = plt.subplots()\n"
+                "    ax.plot(windows, mae_values)\n"
+                "    artifact = save_figure(fig, filename='plot.webp', format='webp')\n"
+                "    plt.close(fig)\n"
+                "    return {'artifacts': [artifact]}\n"
+                "```\n"
                 "Returns the dict your function returns, or an error message."
             ),
             "parameters": {
@@ -148,22 +195,10 @@ TOOLS: list[dict] = [
                         "type": "string",
                         "description": (
                             "Python source defining `def compute(nc_dir: str) -> dict`. "
-                            "Must be self-contained (no imports outside the stdlib + xarray/numpy/scipy/pandas). "
-                            "Example:\n"
-                            "```python\n"
-                            "import xarray as xr\n"
-                            "import numpy as np\n"
-                            "from pathlib import Path\n\n"
-                            "def compute(nc_dir: str) -> dict:\n"
-                            "    files = list(Path(nc_dir).glob('*.nc'))\n"
-                            "    results = {}\n"
-                            "    for f in files:\n"
-                            "        ds = xr.open_dataset(f)\n"
-                            "        if 'mean_mae' in ds:\n"
-                            "            results[f.stem] = float(ds['mean_mae'].mean())\n"
-                            "        ds.close()\n"
-                            "    return results\n"
-                            "```"
+                            "Must be self-contained (no imports outside the stdlib + xarray/numpy/scipy/pandas/matplotlib). "
+                            "To return a plot, use save_figure(...) and return the resulting metadata "
+                            "under an 'artifacts' key. Do not encode images manually or return "
+                            "base64/image_data fields."
                         ),
                     },
                 },
@@ -200,9 +235,16 @@ into the response unprompted.
 - If a question is ambiguous, ask one clarifying question rather than guessing.
 - State uncertainty clearly. Do not overinterpret noisy or sparse metrics.
 - Use `run_code` when the built-in metrics don't answer the question — e.g. computing a custom \
-statistic, comparing distributions, or cross-tabulating results across windows. The sandbox has \
-xarray, numpy, scipy, and pandas. The NC files in `nc_dir` are the spatial_metrics_*.nc output \
-files. Always handle missing values (NaN) explicitly in your code.
+statistic, comparing distributions, cross-tabulating results, or producing a chart. The sandbox \
+has xarray, numpy, scipy, pandas, and matplotlib. The NC files in `nc_dir` are the \
+spatial_metrics_*.nc output files. Always handle missing values (NaN) explicitly in your code.
+- When a chart would communicate the result more clearly than a table or prose, produce one using \
+matplotlib. Always use `matplotlib.use('Agg')` before importing pyplot, call \
+`artifact = save_figure(fig, filename='plot.webp', format='webp')`, return it under \
+`{'artifacts': [artifact]}`, and call `plt.close(fig)` after saving.
+- Never manually base64-encode an image, never use `BytesIO` for chart transport, and never \
+return keys like `image`, `image_data`, `figure`, or `figure_data`. If you want to return a \
+chart, the only supported mechanism is `save_figure(...)` plus the `artifacts` list.
 
 ## Output style
 
@@ -221,20 +263,57 @@ and get to the insight.
 # Tool executors
 # ---------------------------------------------------------------------------
 
-async def _exec_list_jobs(args: dict, user_id: str) -> str:
+def _scope_conditions(scope: ChatScope, jobs_table: sa.Table) -> list:
+    """Return a list of SQLAlchemy WHERE-clause expressions for the given scope."""
+    if scope.kind == "benchmark_run_group":
+        if scope.job_ids:
+            return [sa.or_(
+                jobs_table.c.run_id == sa.bindparam("scope_key"),
+                jobs_table.c.id.in_(sa.bindparam("job_ids", expanding=True)),
+            )]
+        return [jobs_table.c.run_id == sa.bindparam("scope_key")]
+    if scope.job_ids:
+        return [jobs_table.c.id.in_(sa.bindparam("job_ids", expanding=True))]
+    return []
+
+
+def _scope_params(scope: ChatScope) -> dict:
+    """Return bind-parameter values that correspond to _scope_conditions."""
+    params: dict = {}
+    if scope.kind == "benchmark_run_group":
+        params["scope_key"] = scope.key
+    if scope.job_ids:
+        params["job_ids"] = scope.job_ids
+    return params
+
+
+# Lightweight table reference for building typed WHERE clauses.
+_jobs = sa.table(
+    "jobs",
+    sa.column("id"),
+    sa.column("user_id"),
+    sa.column("status"),
+    sa.column("run_id"),
+    sa.column("config_json"),
+    sa.column("completed_at"),
+    sa.column("created_at"),
+)
+
+
+async def _exec_list_jobs(args: dict, user_id: str, scope: ChatScope) -> str:
     from ..database import get_db
-    from sqlalchemy import text
+
+    query = (
+        sa.select(_jobs.c.id, _jobs.c.config_json, _jobs.c.status, _jobs.c.completed_at, _jobs.c.created_at)
+        .where(_jobs.c.user_id == sa.bindparam("uid"))
+        .where(_jobs.c.status == "complete")
+    )
+    for cond in _scope_conditions(scope, _jobs):
+        query = query.where(cond)
+    query = query.order_by(_jobs.c.completed_at.desc())
 
     async with get_db() as conn:
-        rows = (await conn.execute(
-            text("""
-                SELECT id, config_json, status, completed_at, created_at
-                FROM jobs
-                WHERE user_id = :uid AND status = 'complete'
-                ORDER BY completed_at DESC
-            """),
-            {"uid": user_id},
-        )).mappings().fetchall()
+        rows = (await conn.execute(query, {"uid": user_id, **_scope_params(scope)})).mappings().fetchall()
         rows = [dict(r) for r in rows]
     jobs = []
     for r in rows:
@@ -249,17 +328,20 @@ async def _exec_list_jobs(args: dict, user_id: str) -> str:
     return json.dumps(jobs)
 
 
-async def _exec_get_job_info(args: dict, user_id: str) -> str:
+async def _exec_get_job_info(args: dict, user_id: str, scope: ChatScope) -> str:
     from ..database import get_db
-    from sqlalchemy import text
 
     job_id = args["job_id"]
+    query = (
+        sa.select(_jobs.c.config_json, _jobs.c.status)
+        .where(_jobs.c.id == sa.bindparam("id"))
+        .where(_jobs.c.user_id == sa.bindparam("uid"))
+    )
+    for cond in _scope_conditions(scope, _jobs):
+        query = query.where(cond)
 
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT config_json, status FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user_id},
-        )).mappings().fetchone()
+        row = (await conn.execute(query, {"id": job_id, "uid": user_id, **_scope_params(scope)})).mappings().fetchone()
         row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
@@ -274,18 +356,29 @@ async def _exec_get_job_info(args: dict, user_id: str) -> str:
     })
 
 
-async def _exec_get_job_metrics(args: dict, user_id: str) -> str:
+def _job_status_query(scope: ChatScope):
+    """Build a SELECT status query for a single job filtered by scope."""
+    query = (
+        sa.select(_jobs.c.status)
+        .where(_jobs.c.id == sa.bindparam("id"))
+        .where(_jobs.c.user_id == sa.bindparam("uid"))
+    )
+    for cond in _scope_conditions(scope, _jobs):
+        query = query.where(cond)
+    return query
+
+
+async def _exec_get_job_metrics(args: dict, user_id: str, scope: ChatScope) -> str:
     import numpy as np
     from ..database import get_db
     from ..services.storage import get_storage
-    from sqlalchemy import text
 
     job_id = args["job_id"]
 
     async with get_db() as conn:
         row = (await conn.execute(
-            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user_id},
+            _job_status_query(scope),
+            {"id": job_id, "uid": user_id, **_scope_params(scope)},
         )).mappings().fetchone()
         row = dict(row) if row else None
     if not row:
@@ -342,11 +435,10 @@ async def _exec_get_job_metrics(args: dict, user_id: str) -> str:
     return json.dumps({"job_id": job_id, "windows": windows})
 
 
-async def _exec_get_spatial_summary(args: dict, user_id: str) -> str:
+async def _exec_get_spatial_summary(args: dict, user_id: str, scope: ChatScope) -> str:
     import numpy as np
     from ..database import get_db
     from ..services.storage import get_storage
-    from sqlalchemy import text
 
     job_id = args["job_id"]
     model = args["model"]
@@ -355,8 +447,8 @@ async def _exec_get_spatial_summary(args: dict, user_id: str) -> str:
 
     async with get_db() as conn:
         row = (await conn.execute(
-            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user_id},
+            _job_status_query(scope),
+            {"id": job_id, "uid": user_id, **_scope_params(scope)},
         )).mappings().fetchone()
         row = dict(row) if row else None
     if not row:
@@ -426,7 +518,7 @@ async def _exec_get_spatial_summary(args: dict, user_id: str) -> str:
     return json.dumps(result)
 
 
-async def _exec_run_code_sandbox(args: dict, user_id: str) -> str:
+async def _exec_run_code_sandbox(args: dict, user_id: str, scope: ChatScope) -> str:
     import asyncio
 
     code = args["code"]
@@ -438,24 +530,23 @@ async def _exec_run_code_sandbox(args: dict, user_id: str) -> str:
 
     try:
         result = await asyncio.to_thread(_run)
-        return json.dumps(result)
+        return result
     except Exception as exc:
         logger.exception("run_code_sandbox failed")
-        return json.dumps({"error": str(exc)})
+        return {"ok": False, "error": str(exc)}
 
 
-async def _exec_run_code(args: dict, user_id: str) -> str:
+async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
     from ..database import get_db
     from ..services.storage import get_storage
-    from sqlalchemy import text
 
     job_id = args["job_id"]
     code = args["code"]
 
     async with get_db() as conn:
         row = (await conn.execute(
-            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user_id},
+            _job_status_query(scope),
+            {"id": job_id, "uid": user_id, **_scope_params(scope)},
         )).mappings().fetchone()
         row = dict(row) if row else None
     if not row:
@@ -474,10 +565,10 @@ async def _exec_run_code(args: dict, user_id: str) -> str:
 
     try:
         result = await asyncio.to_thread(_run)
-        return json.dumps(result)
+        return result
     except Exception as exc:
         logger.exception("run_code sandbox failed")
-        return json.dumps({"error": str(exc)})
+        return {"ok": False, "error": str(exc)}
 
 
 # Registry — add new tools here without touching the streaming logic.
@@ -491,15 +582,66 @@ _EXECUTORS: dict[str, callable] = {
 }
 
 
-async def execute_tool(name: str, args: dict, user_id: str) -> str:
+async def _prepare_tool_result(raw_result: object, session_id: str, user_id: str) -> ToolExecutionResult:
+    if isinstance(raw_result, str):
+        try:
+            parsed = json.loads(raw_result)
+        except json.JSONDecodeError:
+            parsed = {"raw": raw_result}
+        return ToolExecutionResult(content=raw_result, parsed=parsed)
+
+    if not isinstance(raw_result, dict):
+        content = json.dumps({"value": raw_result})
+        return ToolExecutionResult(content=content, parsed={"value": raw_result})
+
+    parsed = dict(raw_result)
+    saved_artifacts = []
+    sanitized_artifacts = []
+    for artifact_meta in raw_result.get("artifacts", []):
+        if not isinstance(artifact_meta, dict):
+            continue
+        data = artifact_meta.get("data")
+        if artifact_meta.get("kind") == "figure" and isinstance(data, (bytes, bytearray)):
+            artifact = await create_chat_figure_artifact(
+                session_id,
+                user_id,
+                bytes(data),
+                label=artifact_meta.get("label"),
+                filename=artifact_meta.get("filename"),
+                media_type=artifact_meta.get("media_type"),
+            )
+            saved_artifacts.append(artifact)
+            sanitized_artifacts.append({
+                "id": artifact.id,
+                "kind": artifact.kind,
+                "url": artifact.url,
+                "label": artifact.label,
+                "media_type": artifact.media_type,
+                "filename": artifact.filename,
+                "created_at": artifact.created_at.isoformat(),
+            })
+
+    payload = {
+        key: value
+        for key, value in parsed.items()
+        if key != "artifacts"
+    }
+    if sanitized_artifacts:
+        payload["artifacts"] = sanitized_artifacts
+    content = json.dumps(payload)
+    return ToolExecutionResult(content=content, parsed=payload, artifacts=saved_artifacts)
+
+
+async def execute_tool(name: str, args: dict, user_id: str, scope: ChatScope, session_id: str) -> ToolExecutionResult:
     executor = _EXECUTORS.get(name)
     if not executor:
-        return json.dumps({"error": f"Unknown tool: {name}"})
+        return ToolExecutionResult(content=json.dumps({"error": f"Unknown tool: {name}"}), parsed={"error": f"Unknown tool: {name}"})
     try:
-        return await executor(args, user_id)
+        raw_result = await executor(args, user_id, scope)
+        return await _prepare_tool_result(raw_result, session_id, user_id)
     except Exception as exc:
         logger.exception("Tool %s failed", name)
-        return json.dumps({"error": str(exc)})
+        return ToolExecutionResult(content=json.dumps({"error": str(exc)}), parsed={"error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +659,8 @@ def get_client():
 async def stream_response(
     messages: list[dict],
     user_id: str,
+    session_id: str,
+    session_scope: ChatScope,
 ) -> AsyncIterator[str]:
     """
     Run one turn of the conversation, yielding SSE-formatted data lines.
@@ -530,6 +674,7 @@ async def stream_response(
 
     client = get_client()
     working_messages = list(messages)
+    turn = ChatTurn(id=new_turn_id(), role="assistant", content="", created_at=utc_now())
 
     while True:
         # Accumulate the full response so we can handle tool calls.
@@ -552,7 +697,8 @@ async def stream_response(
             # Text content
             if delta.content:
                 response_message["content"] += delta.content
-                yield json.dumps({"type": "text", "content": delta.content})
+                turn.content += delta.content
+                yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": delta.content})
 
             # Tool call deltas — accumulate across chunks
             if delta.tool_calls:
@@ -576,8 +722,13 @@ async def stream_response(
 
         # If no tool calls, we're done — append the final assistant message and emit
         if not tool_calls:
+            turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
             working_messages.append(response_message)
-            yield json.dumps({"type": "done", "messages": working_messages})
+            yield json.dumps({
+                "type": "done",
+                "provider_state": working_messages,
+                "turn": turn.model_dump(mode="json"),
+            })
             return
 
         # Append the assistant message with tool calls
@@ -592,12 +743,38 @@ async def stream_response(
             except json.JSONDecodeError:
                 args = {}
 
-            yield json.dumps({"type": "tool_call", "name": name, "input": args})
-            result = await execute_tool(name, args, user_id)
-            yield json.dumps({"type": "tool_result", "name": name, "content": result})
+            turn_tool = ChatToolCall(id=tc["id"], name=name, status="running", input=args)
+            turn.tool_calls.append(turn_tool)
+            yield json.dumps({
+                "type": "tool_call",
+                "turn_id": turn.id,
+                "tool_call": turn_tool.model_dump(mode="json"),
+            })
+            result = await execute_tool(name, args, user_id, session_scope, session_id)
+
+            for artifact in result.artifacts:
+                turn_tool.artifacts.append(artifact)
+                turn.artifacts.append(artifact)
+                yield json.dumps({
+                    "type": "artifact",
+                    "turn_id": turn.id,
+                    "tool_call_id": turn_tool.id,
+                    "artifact": artifact.model_dump(mode="json"),
+                })
+
+            parsed_result = result.parsed
+            turn_tool.status = "failed" if isinstance(parsed_result, dict) and parsed_result.get("error") else "completed"
+            turn_tool.result = parsed_result
+            yield json.dumps({
+                "type": "tool_result",
+                "turn_id": turn.id,
+                "tool_call_id": turn_tool.id,
+                "status": turn_tool.status,
+                "result": parsed_result,
+            })
 
             working_messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
-                "content": result,
+                "content": result.content,
             })
