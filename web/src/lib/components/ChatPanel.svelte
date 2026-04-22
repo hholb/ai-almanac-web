@@ -2,6 +2,9 @@
   import { onMount, tick } from "svelte";
   import { marked } from "marked";
   import DOMPurify from "dompurify";
+  import FigureCard from "$lib/components/FigureCard.svelte";
+  import FigureLightbox from "$lib/components/FigureLightbox.svelte";
+  import type { ParsedFigure } from "$lib/result-parser";
   import {
     createChatSession,
     getChatSessions,
@@ -11,8 +14,20 @@
     type ChatSession,
     type ChatMessage,
     type ChatEvent,
+    type ChatScope,
+    type ChatToolCall,
+    type ChatArtifact,
   } from "$lib/api";
+
   import type { Job } from "$lib/api";
+
+  type GalleryFigure = {
+    artifactId: string;
+    figure: ParsedFigure;
+    toolName: string | null;
+    code: string | null;
+    createdAt: string;
+  };
 
   function renderMarkdown(text: string): string {
     return DOMPurify.sanitize(marked.parse(text) as string);
@@ -20,9 +35,10 @@
 
   interface Props {
     jobs: Job[];
+    scopeKey: string;
   }
 
-  let { jobs }: Props = $props();
+  let { jobs, scopeKey }: Props = $props();
 
   // Session list
   let sessions = $state<ChatSession[]>([]);
@@ -35,9 +51,11 @@
   let showSessionList = $state(false);
 
   // Streaming assistant turn
-  let streamingContent = $state("");
-  let activeToolCalls = $state<{ name: string; done: boolean; code?: string }[]>([]);
+  let streamingTurn = $state<ChatMessage | null>(null);
   let shownCode = $state<Set<string>>(new Set());
+  let loadedScopeKey = $state<string | null>(null);
+  let galleryFigures = $derived(sessionFigures());
+  let activeTab = $state<"chat" | "artifacts">("chat");
 
   function toggleCode(key: string) {
     const next = new Set(shownCode);
@@ -46,31 +64,104 @@
     shownCode = next;
   }
 
-  // Code snippets collected this turn — appended to messages on done so they persist.
-  let pendingSnippets = $state<{ name: string; code: string }[]>([]);
-
   const CODE_TOOLS = new Set(["run_code_sandbox", "run_code"]);
 
   async function copyCode(code: string) {
     await navigator.clipboard.writeText(code);
   }
 
-  function extractCodeFromMessage(msg: ChatMessage): { name: string; code: string }[] {
-    if (!msg.tool_calls) return [];
-    return msg.tool_calls
-      .filter((tc) => CODE_TOOLS.has(tc.function.name))
-      .map((tc) => {
-        try {
-          const args = JSON.parse(tc.function.arguments);
-          return { name: tc.function.name, code: args.code ?? "" };
-        } catch {
-          return null;
+  function sessionScope(): ChatScope {
+    return {
+      kind: "benchmark_run_group",
+      key: scopeKey,
+      title: jobs.map((j) => j.model_name.toUpperCase()).join(", "),
+      job_ids: jobs.map((j) => j.id),
+    };
+  }
+
+  function codeForToolCall(toolCall: ChatToolCall): string | null {
+    if (!CODE_TOOLS.has(toolCall.name)) return null;
+    const code = toolCall.input.code;
+    return typeof code === "string" && code.length > 0 ? code : null;
+  }
+
+  function mergeArtifacts(base: ChatMessage | null, incoming: ChatMessage): ChatMessage {
+    const byId = new Map<string, NonNullable<ChatMessage["artifacts"]>[number]>();
+    for (const artifact of base?.artifacts ?? []) byId.set(artifact.id, artifact);
+    for (const artifact of incoming.artifacts ?? []) byId.set(artifact.id, artifact);
+    return { ...incoming, artifacts: [...byId.values()] };
+  }
+
+  function artifactsForTurn(turn: ChatMessage): NonNullable<ChatMessage["artifacts"]> {
+    const byId = new Map<string, NonNullable<ChatMessage["artifacts"]>[number]>();
+    for (const artifact of turn.artifacts ?? []) byId.set(artifact.id, artifact);
+    for (const toolCall of turn.tool_calls ?? []) {
+      for (const artifact of toolCall.artifacts ?? []) {
+        byId.set(artifact.id, artifact);
+      }
+    }
+    return [...byId.values()];
+  }
+
+  function visibleTurns(): ChatMessage[] {
+    return streamingTurn ? [...messages, streamingTurn] : messages;
+  }
+
+  function artifactToFigure(artifact: ChatArtifact): ParsedFigure {
+    const name = artifact.filename ?? `${artifact.id}.webp`;
+    return {
+      raw: {
+        name,
+        type: "figure",
+        url: artifact.url,
+      },
+      kind: "unknown",
+      metric: null,
+      model: null,
+      window: null,
+      label: artifact.label ?? name,
+    };
+  }
+
+  function sessionFigures(): GalleryFigure[] {
+    const byId = new Map<string, GalleryFigure>();
+    for (const turn of visibleTurns()) {
+      if (turn.role !== "assistant") continue;
+      const codeTools = (turn.tool_calls ?? []).filter((toolCall) => codeForToolCall(toolCall));
+      for (const artifact of artifactsForTurn(turn)) {
+        let sourceTool: ChatToolCall | null = null;
+        for (const toolCall of turn.tool_calls ?? []) {
+          if ((toolCall.artifacts ?? []).some((toolArtifact) => toolArtifact.id === artifact.id)) {
+            sourceTool = toolCall;
+            break;
+          }
         }
-      })
-      .filter((x): x is { name: string; code: string } => x !== null && x.code !== "");
+        if (!sourceTool && codeTools.length === 1) {
+          sourceTool = codeTools[0];
+        }
+        byId.set(artifact.id, {
+          artifactId: artifact.id,
+          figure: artifactToFigure(artifact),
+          toolName: sourceTool?.name ?? null,
+          code: sourceTool ? codeForToolCall(sourceTool) : null,
+          createdAt: artifact.created_at,
+        });
+      }
+    }
+    return [...byId.values()];
   }
 
   let messagesEl = $state<HTMLElement | null>(null);
+  let selectedFigureIndex = $state<number | null>(null);
+
+  function artifactCodeKey(artifactId: string): string {
+    return `artifact-${artifactId}`;
+  }
+
+  function openArtifactInGallery(artifactId: string) {
+    const idx = galleryFigures.findIndex((f) => f.artifactId === artifactId);
+    if (idx !== -1) selectedFigureIndex = idx;
+  }
 
   function handleOutsideClick(e: MouseEvent) {
     if (showSessionList && !(e.target as Element).closest(".session-selector")) {
@@ -80,22 +171,27 @@
 
   onMount(() => {
     document.addEventListener("click", handleOutsideClick, true);
+    return () => document.removeEventListener("click", handleOutsideClick, true);
+  });
 
-    (async () => {
+  $effect(() => {
+    const key = scopeKey;
+    if (!key || key === loadedScopeKey) return;
+    loadedScopeKey = key;
+    streamingTurn = null;
+    void (async () => {
       try {
-        const all = await getChatSessions();
+        const all = await getChatSessions(sessionScope());
         sessions = all;
         if (all.length > 0) {
           await loadSession(all[0].id);
         } else {
           await createNewSession();
         }
-      } catch (e) {
+      } catch {
         error = "Failed to load chat sessions.";
       }
     })();
-
-    return () => document.removeEventListener("click", handleOutsideClick, true);
   });
 
   async function loadSession(id: string) {
@@ -104,13 +200,8 @@
     try {
       const detail = await getChatSession(id);
       sessionId = id;
-      // Keep user messages, assistant text, and assistant tool-call messages that
-      // contain code (so sandbox runs are visible in history).
-      messages = detail.messages.filter(
-        (m) => m.role === "user" ||
-          (m.role === "assistant" && (m.content || extractCodeFromMessage(m).length > 0))
-      );
-    } catch (e) {
+      messages = detail.transcript;
+    } catch {
       error = "Failed to load session.";
     } finally {
       loadingSession = false;
@@ -121,13 +212,12 @@
   async function createNewSession() {
     error = null;
     try {
-      const jobIds = jobs.map((j) => j.id);
-      const title = jobs.map((j) => j.model_name.toUpperCase()).join(", ");
-      const session = await createChatSession(jobIds, title);
+      const scope = sessionScope();
+      const session = await createChatSession(scope, scope.title ?? undefined);
       sessions = [session, ...sessions];
       sessionId = session.id;
       messages = [];
-    } catch (e) {
+    } catch {
       error = "Failed to create session.";
     }
     showSessionList = false;
@@ -137,10 +227,11 @@
     e.stopPropagation();
     try {
       await deleteChatSession(id);
-      sessions = sessions.filter((s) => s.id !== id);
+      const nextSessions = sessions.filter((s) => s.id !== id);
+      sessions = nextSessions;
       if (sessionId === id) {
-        if (sessions.length > 0) {
-          await loadSession(sessions[0].id);
+        if (nextSessions.length > 0) {
+          await loadSession(nextSessions[0].id);
         } else {
           await createNewSession();
         }
@@ -161,7 +252,7 @@
 
   // Scroll to bottom whenever messages update.
   $effect(() => {
-    messages; streamingContent;
+    messages; streamingTurn;
     tick().then(() => {
       if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
     });
@@ -173,58 +264,66 @@
     input = "";
     sending = true;
     error = null;
-    streamingContent = "";
-    activeToolCalls = [];
-    pendingSnippets = [];
 
-    messages = [...messages, { role: "user", content: text }];
+    messages = [...messages, {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: text,
+      created_at: new Date().toISOString(),
+      tool_calls: [],
+    }];
 
     try {
       for await (const event of sendChatMessage(sessionId, text)) {
-        if (event.type === "text") {
-          streamingContent += event.content;
+        if (event.type === "text_delta") {
+          if (!streamingTurn || streamingTurn.id !== event.turn_id) {
+            streamingTurn = {
+              id: event.turn_id,
+              role: "assistant",
+              content: "",
+              created_at: new Date().toISOString(),
+              tool_calls: [],
+              artifacts: [],
+            };
+          }
+          streamingTurn = { ...streamingTurn, content: streamingTurn.content + event.content };
         } else if (event.type === "tool_call") {
-          const code = CODE_TOOLS.has(event.name) ? (event.input as any).code as string | undefined : undefined;
-          activeToolCalls = [...activeToolCalls, { name: event.name, done: false, code }];
-          if (code) pendingSnippets = [...pendingSnippets, { name: event.name, code }];
+          if (!streamingTurn || streamingTurn.id !== event.turn_id) {
+            streamingTurn = {
+              id: event.turn_id,
+              role: "assistant",
+              content: "",
+              created_at: new Date().toISOString(),
+              tool_calls: [],
+              artifacts: [],
+            };
+          }
+          streamingTurn = {
+            ...streamingTurn,
+            tool_calls: [...(streamingTurn.tool_calls ?? []), event.tool_call],
+          };
         } else if (event.type === "tool_result") {
-          activeToolCalls = activeToolCalls.map((tc) =>
-            tc.name === event.name && !tc.done ? { ...tc, done: true } : tc
-          );
+          if (!streamingTurn || streamingTurn.id !== event.turn_id) continue;
+          streamingTurn = {
+            ...streamingTurn,
+            tool_calls: (streamingTurn.tool_calls ?? []).map((tc) =>
+              tc.id === event.tool_call_id ? { ...tc, status: event.status, result: event.result } : tc
+            ),
+          };
+        } else if (event.type === "artifact") {
+          if (!streamingTurn || streamingTurn.id !== event.turn_id) continue;
+          streamingTurn = {
+            ...streamingTurn,
+            artifacts: [...(streamingTurn.artifacts ?? []), event.artifact],
+            tool_calls: (streamingTurn.tool_calls ?? []).map((tc) =>
+              tc.id === event.tool_call_id
+                ? { ...tc, artifacts: [...(tc.artifacts ?? []), event.artifact] }
+                : tc
+            ),
+          };
         } else if (event.type === "done") {
-          // Extract code snippets from the authoritative done.messages payload.
-          // This is more reliable than pendingSnippets which depends on tool_call
-          // events having correctly-parsed input.
-          const doneSnippets: { name: string; code: string }[] = [];
-          if (event.messages) {
-            for (const m of event.messages) {
-              if (m.role === "assistant" && m.tool_calls) {
-                for (const tc of m.tool_calls) {
-                  if (CODE_TOOLS.has(tc.function.name)) {
-                    try {
-                      const args = JSON.parse(tc.function.arguments);
-                      if (args.code) doneSnippets.push({ name: tc.function.name, code: args.code });
-                    } catch { /* skip malformed */ }
-                  }
-                }
-              }
-            }
-          } else {
-            // Fallback: use pendingSnippets if done.messages not available
-            doneSnippets.push(...pendingSnippets);
-          }
-          if (doneSnippets.length > 0) {
-            messages = [...messages, { role: "assistant", content: "", tool_calls: doneSnippets.map((s, i) => ({
-              id: `local-${i}`, type: "function",
-              function: { name: s.name, arguments: JSON.stringify({ code: s.code }) }
-            })) }];
-          }
-          if (streamingContent) {
-            messages = [...messages, { role: "assistant", content: streamingContent }];
-          }
-          streamingContent = "";
-          activeToolCalls = [];
-          pendingSnippets = [];
+          messages = [...messages, mergeArtifacts(streamingTurn, event.turn)];
+          streamingTurn = null;
           // Update session's message_count in the list
           sessions = sessions.map((s) =>
             s.id === sessionId ? { ...s, message_count: s.message_count + 2, updated_at: new Date().toISOString() } : s
@@ -250,7 +349,6 @@
   async function copyChat() {
     if (messages.length === 0) return;
     const text = messages
-      .filter((m) => m.role === "user" || m.role === "assistant")
       .map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`)
       .join("\n\n");
     await navigator.clipboard.writeText(text);
@@ -329,98 +427,173 @@
     </div>
   </div>
 
-  <div class="messages" bind:this={messagesEl}>
-    {#if loadingSession}
-      <div class="loading-msgs">
-        <div class="spinner-sm"></div>
-        <span>Loading…</span>
-      </div>
-    {:else if messages.length === 0 && !sending}
-      <div class="empty-chat">
-        <p>Ask a question about the benchmark results above.</p>
-        <div class="suggestions">
-          <button class="suggestion" onclick={() => { input = "How do the models compare on false alarm rate?"; submit(); }}>
-            How do the models compare on false alarm rate?
-          </button>
-          <button class="suggestion" onclick={() => { input = "Which model has the best MAE at longer lead times?"; submit(); }}>
-            Which model has the best MAE at longer lead times?
-          </button>
-          <button class="suggestion" onclick={() => { input = "Summarise the key findings from these runs."; submit(); }}>
-            Summarise the key findings from these runs.
-          </button>
-        </div>
-      </div>
-    {/if}
+  <div class="panel-tabs">
+    <button
+      class="panel-tab"
+      class:active={activeTab === "chat"}
+      onclick={() => { activeTab = "chat"; }}
+    >
+      Chat
+    </button>
+    <button
+      class="panel-tab"
+      class:active={activeTab === "artifacts"}
+      onclick={() => { activeTab = "artifacts"; }}
+    >
+      Artifacts
+      {#if galleryFigures.length > 0}
+        <span class="panel-tab-count">{galleryFigures.length}</span>
+      {/if}
+    </button>
+  </div>
 
-    {#each messages as msg, i}
-      {#if msg.role === "assistant"}
-        {@const snippets = extractCodeFromMessage(msg)}
-        {#each snippets as snippet, si}
-          {@const key = `hist-${i}-${si}`}
-          <div class="code-snippet">
-            <div class="code-snippet-header">
-              <span class="code-snippet-label">{formatToolName(snippet.name)}</span>
-              <div class="code-snippet-actions">
-                <button class="code-action-btn" onclick={() => copyCode(snippet.code)}>Copy</button>
-                <button class="code-action-btn" onclick={() => toggleCode(key)}>
-                  {shownCode.has(key) ? "Hide code" : "Show code"}
-                </button>
-              </div>
-            </div>
-            {#if shownCode.has(key)}
-              <pre class="code-block"><code>{snippet.code}</code></pre>
-            {/if}
+  {#if activeTab === "chat"}
+    <div class="messages" bind:this={messagesEl}>
+      {#if loadingSession}
+        <div class="loading-msgs">
+          <div class="spinner-sm"></div>
+          <span>Loading…</span>
+        </div>
+      {:else if messages.length === 0 && !sending}
+        <div class="empty-chat">
+          <p>Ask a question about the benchmark results above.</p>
+          <div class="suggestions">
+            <button class="suggestion" onclick={() => { input = "How do the models compare on false alarm rate?"; submit(); }}>
+              How do the models compare on false alarm rate?
+            </button>
+            <button class="suggestion" onclick={() => { input = "Which model has the best MAE at longer lead times?"; submit(); }}>
+              Which model has the best MAE at longer lead times?
+            </button>
+            <button class="suggestion" onclick={() => { input = "Summarise the key findings from these runs."; submit(); }}>
+              Summarise the key findings from these runs.
+            </button>
           </div>
-        {/each}
-        {#if msg.content}
-          <div class="message assistant">
-            <div class="message-content prose">{@html renderMarkdown(msg.content)}</div>
+        </div>
+      {/if}
+
+      {#each visibleTurns() as msg, i}
+        {#if msg.role === "user" || msg.content}
+          <div class="message {msg.role}">
+            <div class="message-content" class:prose={msg.role === "assistant"}>
+              {#if msg.role === "assistant"}
+                {@html renderMarkdown(msg.content)}
+              {:else}
+                {msg.content}
+              {/if}
+            </div>
           </div>
         {/if}
-      {:else}
-        <div class="message user">
-          <div class="message-content">{msg.content}</div>
-        </div>
-      {/if}
-    {/each}
 
-    {#if sending}
-      {#each activeToolCalls as tc}
-        <div class="tool-indicator {tc.done ? 'done' : 'active'}">
-          <span class="tool-icon">{tc.done ? "✓" : "⟳"}</span>
-          <span>{formatToolName(tc.name)}</span>
-        </div>
+        {#if msg.role === "assistant"}
+          {#each msg.tool_calls ?? [] as toolCall, ti}
+            {@const code = codeForToolCall(toolCall)}
+            {#if code}
+              {@const key = `hist-${i}-${ti}`}
+              <div class="code-snippet">
+                <div class="code-snippet-header">
+                  <span class="code-snippet-label">{formatToolName(toolCall.name)}</span>
+                  <div class="code-snippet-actions">
+                    <button class="code-action-btn" onclick={() => copyCode(code)}>Copy</button>
+                    <button class="code-action-btn" onclick={() => toggleCode(key)}>
+                      {shownCode.has(key) ? "Hide code" : "Show code"}
+                    </button>
+                  </div>
+                </div>
+                {#if shownCode.has(key)}
+                  <pre class="code-block"><code>{code}</code></pre>
+                {/if}
+              </div>
+            {/if}
+            {#each toolCall.artifacts ?? [] as artifact}
+              <button class="artifact-chip" onclick={() => openArtifactInGallery(artifact.id)}>
+                &#128444; {artifact.label ?? "Figure"} &rarr;
+              </button>
+            {/each}
+          {/each}
+        {/if}
       {/each}
 
-      {#if streamingContent}
-        <div class="message assistant">
-          <div class="message-content prose streaming">{@html renderMarkdown(streamingContent)}<span class="cursor">▋</span></div>
+      {#if sending}
+        {@const runningTool = streamingTurn?.tool_calls?.find((tc) => tc.status === "running")}
+        {#if !streamingTurn || runningTool}
+          <div class="thinking">
+            {#if runningTool}
+              <span class="thinking-label">{formatToolName(runningTool.name)}…</span>
+            {/if}
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          </div>
+        {/if}
+      {/if}
+    </div>
+  {:else}
+    <section class="artifact-gallery artifact-gallery-tab">
+      {#if galleryFigures.length > 0}
+        <div class="artifact-gallery-header">
+          <span class="artifact-gallery-title">Artifacts</span>
+          <span class="artifact-gallery-count">{galleryFigures.length}</span>
         </div>
-      {:else if activeToolCalls.length === 0}
-        <div class="thinking">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <div class="artifact-gallery-grid">
+          {#each galleryFigures as item, fi (item.artifactId)}
+            {@const codeKey = artifactCodeKey(item.artifactId)}
+            <div class="artifact-item">
+              <FigureCard figure={item.figure} onclick={() => { selectedFigureIndex = fi; }} />
+              <div class="artifact-meta">
+                <div class="artifact-meta-row">
+                  <span class="artifact-source">
+                    {item.toolName ? formatToolName(item.toolName) : "generated artifact"}
+                  </span>
+                  <span class="artifact-time">{new Date(item.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                </div>
+                {#if item.code}
+                  <div class="artifact-actions">
+                    <button class="code-action-btn" onclick={() => copyCode(item.code!)}>Copy code</button>
+                    <button class="code-action-btn" onclick={() => toggleCode(codeKey)}>
+                      {shownCode.has(codeKey) ? "Hide code" : "Show code"}
+                    </button>
+                  </div>
+                  {#if shownCode.has(codeKey)}
+                    <pre class="code-block artifact-code"><code>{item.code}</code></pre>
+                  {/if}
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="artifact-gallery-empty">
+          Generated figures will appear here.
         </div>
       {/if}
-    {/if}
-  </div>
+    </section>
+  {/if}
 
   {#if error}
     <div class="chat-error">{error}</div>
   {/if}
 
-  <div class="input-row">
-    <textarea
-      bind:value={input}
-      onkeydown={handleKeydown}
-      placeholder="Ask about the results… (Enter to send, Shift+Enter for newline)"
-      rows={2}
-      disabled={sending || !sessionId || loadingSession}
-    ></textarea>
-    <button class="send-btn" onclick={submit} disabled={sending || !input.trim() || !sessionId || loadingSession}>
-      {sending ? "…" : "Send"}
-    </button>
-  </div>
+  {#if activeTab === "chat"}
+    <div class="input-row">
+      <textarea
+        bind:value={input}
+        onkeydown={handleKeydown}
+        placeholder="Ask about the results… (Enter to send, Shift+Enter for newline)"
+        rows={2}
+        disabled={sending || !sessionId || loadingSession}
+      ></textarea>
+      <button class="send-btn" onclick={submit} disabled={sending || !input.trim() || !sessionId || loadingSession}>
+        {sending ? "…" : "Send"}
+      </button>
+    </div>
+  {/if}
 </div>
+
+{#if selectedFigureIndex !== null && galleryFigures[selectedFigureIndex]}
+  <FigureLightbox
+    figures={galleryFigures.map((item) => item.figure)}
+    index={selectedFigureIndex}
+    onclose={() => { selectedFigureIndex = null; }}
+  />
+{/if}
 
 <style>
   .chat-panel {
@@ -445,6 +618,53 @@
     background: linear-gradient(90deg, rgba(212,147,63,0.06) 0%, var(--color-surface) 40%);
     flex-shrink: 0;
     position: relative;
+  }
+
+  .panel-tabs {
+    display: flex;
+    gap: 0.35rem;
+    padding: 0.6rem 0.85rem;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
+    flex-shrink: 0;
+  }
+
+  .panel-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.38rem 0.75rem;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+  }
+
+  .panel-tab:hover {
+    color: var(--color-text);
+    border-color: var(--color-accent-border);
+  }
+
+  .panel-tab.active {
+    color: var(--color-accent);
+    border-color: var(--color-accent-border);
+    background: var(--color-accent-light);
+  }
+
+  .panel-tab-count {
+    min-width: 1.15rem;
+    padding: 0.05rem 0.25rem;
+    border-radius: 999px;
+    background: var(--color-surface-raised);
+    color: inherit;
+    font-size: 0.68rem;
+    text-align: center;
   }
 
   .ai-badge {
@@ -664,6 +884,105 @@
     padding: 0.5rem 0;
   }
 
+  .artifact-gallery {
+    border: 1px solid var(--color-border);
+    border-radius: 0.6rem;
+    background: linear-gradient(180deg, var(--color-surface) 0%, var(--color-surface-raised) 100%);
+    overflow: hidden;
+  }
+
+  .artifact-gallery-tab {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    margin: 0.85rem;
+  }
+
+  .artifact-gallery-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.7rem 0.9rem;
+    border-bottom: 1px solid var(--color-border-subtle);
+    background: rgba(212, 147, 63, 0.05);
+  }
+
+  .artifact-gallery-title {
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-accent);
+  }
+
+  .artifact-gallery-count {
+    min-width: 1.5rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    text-align: center;
+  }
+
+  .artifact-gallery-grid {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0.85rem;
+    overflow-y: auto;
+  }
+
+  .artifact-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .artifact-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0 0.1rem;
+  }
+
+  .artifact-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .artifact-source {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--color-accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .artifact-time {
+    font-size: 0.72rem;
+    color: var(--color-text-dim);
+  }
+
+  .artifact-actions {
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  .artifact-code {
+    font-size: 0.74rem;
+  }
+
+  .artifact-gallery-empty {
+    padding: 1rem;
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+  }
+
   .suggestions {
     display: flex;
     flex-direction: column;
@@ -766,6 +1085,27 @@
     font-size: 0.78rem;
   }
 
+  .artifact-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.65rem;
+    border: 1px solid var(--color-accent);
+    border-radius: 2rem;
+    background: var(--color-accent-light);
+    color: var(--color-accent);
+    font-size: 0.72rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.12s, color 0.12s;
+    margin-top: 0.25rem;
+  }
+
+  .artifact-chip:hover {
+    background: var(--color-accent);
+    color: var(--color-bg);
+  }
+
   .code-snippet-header {
     display: flex;
     align-items: center;
@@ -826,7 +1166,12 @@
   .tool-indicator.done { opacity: 0.5; }
   .tool-icon { font-size: 0.7rem; }
 
-  .thinking { display: flex; gap: 4px; padding: 0.4rem 0; }
+  .thinking { display: flex; align-items: center; gap: 6px; padding: 0.4rem 0; }
+  .thinking-label {
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+    font-style: italic;
+  }
   .dot {
     width: 6px; height: 6px;
     border-radius: 50%;
@@ -886,4 +1231,5 @@
   }
   .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .send-btn:not(:disabled):hover { opacity: 0.85; }
+
 </style>

@@ -134,7 +134,7 @@
               <span class="toggle-label">{chatCollapsed ? "AI Analysis" : "Hide"}</span>
             </button>
             {#if !chatCollapsed}
-              <ChatPanel jobs={completeJobs} />
+              <ChatPanel jobs={group.jobs} scopeKey={group.key} />
             {/if}
           </div>
         </div>

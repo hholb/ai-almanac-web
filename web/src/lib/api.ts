@@ -358,34 +358,71 @@ export type ChatSession = {
   created_at: string;
   updated_at: string;
   message_count: number;
+  scope: ChatScope;
 };
 
 export type ChatMessage = {
-  role: "user" | "assistant" | "tool";
+  id: string;
+  role: "user" | "assistant";
   content: string;
-  tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
+  created_at: string;
+  tool_calls?: ChatToolCall[];
+  artifacts?: ChatArtifact[];
 };
 
-export type ChatSessionDetail = ChatSession & { messages: ChatMessage[] };
+export type ChatScope = {
+  kind: "benchmark_run_group" | "job_set";
+  key: string;
+  title?: string | null;
+  job_ids: string[];
+};
+
+export type ChatArtifact = {
+  id: string;
+  kind: "figure";
+  url: string;
+  label?: string | null;
+  filename?: string | null;
+  media_type?: string | null;
+  created_at: string;
+};
+
+export type ChatToolCall = {
+  id: string;
+  name: string;
+  status: "running" | "completed" | "failed";
+  input: Record<string, unknown>;
+  result?: unknown;
+  artifacts: ChatArtifact[];
+};
+
+export type ChatSessionDetail = ChatSession & {
+  scope: ChatScope;
+  transcript: ChatMessage[];
+};
 
 export type ChatEvent =
-  | { type: "text"; content: string }
-  | { type: "tool_call"; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; name: string; content: string }
-  | { type: "done"; messages?: ChatMessage[] };
+  | { type: "text_delta"; turn_id: string; content: string }
+  | { type: "tool_call"; turn_id: string; tool_call: ChatToolCall }
+  | { type: "tool_result"; turn_id: string; tool_call_id: string; status: ChatToolCall["status"]; result: unknown }
+  | { type: "artifact"; turn_id: string; tool_call_id: string; artifact: ChatArtifact }
+  | { type: "done"; turn: ChatMessage };
 
 export async function createChatSession(
-  jobIds: string[] = [],
+  scope: ChatScope,
   title?: string
 ): Promise<ChatSession> {
   return request<ChatSession>("/chat/sessions", {
     method: "POST",
-    body: JSON.stringify({ job_ids: jobIds, title }),
+    body: JSON.stringify({ scope, title }),
   });
 }
 
-export async function getChatSessions(): Promise<ChatSession[]> {
-  return request<ChatSession[]>("/chat/sessions");
+export async function getChatSessions(scope?: ChatScope): Promise<ChatSession[]> {
+  const qs = scope
+    ? `?scope_kind=${encodeURIComponent(scope.kind)}&scope_key=${encodeURIComponent(scope.key)}`
+    : "";
+  return request<ChatSession[]>(`/chat/sessions${qs}`);
 }
 
 export async function getChatSession(id: string): Promise<ChatSessionDetail> {
