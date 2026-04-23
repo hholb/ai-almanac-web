@@ -32,7 +32,7 @@ cd backend
 
 # Copy and configure the env file
 cp .env.example .env
-# Edit .env — at minimum set DEMO_OBS_DATASETS and any model dirs you have locally
+# Edit .env — set any {ID}_OBS_DIR and {REGION}_{ID}_MODEL_DIR vars you have locally
 
 # Install dependencies
 uv sync
@@ -57,19 +57,19 @@ Jobs run as local Docker containers. Make sure `ROMP_IMAGE` in `.env` matches th
 
 ### Adding model data
 
-Set the relevant `*_MODEL_DIR` variables in `.env` to absolute paths on your machine. Any model without a configured directory is hidden from the UI. Example:
+Set the relevant `{REGION}_{ID}_MODEL_DIR` env vars in `.env` to absolute paths on your machine. Any model without a configured directory is hidden from the UI. Example:
 
 ```
-AIFS_MODEL_DIR=/data/romp/india/aifs
-IFS_MODEL_DIR=/data/romp/india/ifs
+INDIA_AIFS_MODEL_DIR=/data/romp/india/aifs
+INDIA_IFS_MODEL_DIR=/data/romp/india/ifs
 ```
 
 ### Adding demo datasets
 
-`DEMO_OBS_DATASETS` is a comma-separated list of `Name=path` (or `Name=path|obs_file_pattern`) entries shown to all users:
+Dataset entries are defined in `backend/app/config/datasets.yaml`. Each entry needs a matching `{ID}_OBS_DIR` env var set to the path of the obs directory. Example:
 
 ```
-DEMO_OBS_DATASETS=India Demo=/data/romp/india/obs,Ethiopia=/data/romp/ethiopia/obs|data_{}.nc
+ETHIOPIA_OBS_DIR=/data/romp/ethiopia/obs
 ```
 
 ---

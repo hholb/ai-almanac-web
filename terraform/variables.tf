@@ -80,41 +80,62 @@ variable "job_runner" {
   default     = "modal"
 }
 
-variable "demo_obs_datasets" {
-  description = "Comma-separated demo obs datasets. Format: 'Name=gs://path|obs_file_pattern,...'"
+variable "ethiopia_obs_dir" {
+  description = "GCS URI for the Ethiopia obs dataset (datasets.yaml id: ethiopia)"
+  type        = string
+  default     = ""
+}
+variable "imd_2p0_obs_dir" {
+  description = "GCS URI for the IMD India 2-degree obs dataset (datasets.yaml id: imd-2p0)"
   type        = string
   default     = ""
 }
 
-variable "aifs_model_dir" {
+variable "india_aifs_model_dir" {
   type    = string
   default = ""
 }
-variable "aifs_daily_model_dir" {
+variable "india_aifs_daily_model_dir" {
   type    = string
   default = ""
 }
-variable "fuxi_model_dir" {
+variable "india_fuxi_model_dir" {
   type    = string
   default = ""
 }
-variable "fuxi_s2s_model_dir" {
+variable "india_fuxi_s2s_model_dir" {
   type    = string
   default = ""
 }
-variable "gencast_model_dir" {
+variable "india_gencast_model_dir" {
   type    = string
   default = ""
 }
-variable "graphcast_model_dir" {
+variable "india_graphcast_model_dir" {
   type    = string
   default = ""
 }
-variable "ifs_model_dir" {
+variable "india_ifs_model_dir" {
   type    = string
   default = ""
 }
-variable "neuralgcm_model_dir" {
+variable "india_neuralgcm_model_dir" {
+  type    = string
+  default = ""
+}
+variable "ethiopia_aifs_model_dir" {
+  type    = string
+  default = ""
+}
+variable "ethiopia_fuxi_model_dir" {
+  type    = string
+  default = ""
+}
+variable "ethiopia_gencast_model_dir" {
+  type    = string
+  default = ""
+}
+variable "ethiopia_graphcast_model_dir" {
   type    = string
   default = ""
 }

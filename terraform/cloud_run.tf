@@ -203,40 +203,60 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.region
       }
       env {
-        name  = "DEMO_OBS_DATASETS"
-        value = var.demo_obs_datasets
+        name  = "ETHIOPIA_OBS_DIR"
+        value = var.ethiopia_obs_dir
       }
       env {
-        name  = "AIFS_MODEL_DIR"
-        value = var.aifs_model_dir
+        name  = "IMD_2P0_OBS_DIR"
+        value = var.imd_2p0_obs_dir
       }
       env {
-        name  = "AIFS_DAILY_MODEL_DIR"
-        value = var.aifs_daily_model_dir
+        name  = "INDIA_AIFS_MODEL_DIR"
+        value = var.india_aifs_model_dir
       }
       env {
-        name  = "FUXI_MODEL_DIR"
-        value = var.fuxi_model_dir
+        name  = "INDIA_AIFS_DAILY_MODEL_DIR"
+        value = var.india_aifs_daily_model_dir
       }
       env {
-        name  = "FUXI_S2S_MODEL_DIR"
-        value = var.fuxi_s2s_model_dir
+        name  = "INDIA_FUXI_MODEL_DIR"
+        value = var.india_fuxi_model_dir
       }
       env {
-        name  = "GENCAST_MODEL_DIR"
-        value = var.gencast_model_dir
+        name  = "INDIA_FUXI_S2S_MODEL_DIR"
+        value = var.india_fuxi_s2s_model_dir
       }
       env {
-        name  = "GRAPHCAST_MODEL_DIR"
-        value = var.graphcast_model_dir
+        name  = "INDIA_GENCAST_MODEL_DIR"
+        value = var.india_gencast_model_dir
       }
       env {
-        name  = "IFS_MODEL_DIR"
-        value = var.ifs_model_dir
+        name  = "INDIA_GRAPHCAST_MODEL_DIR"
+        value = var.india_graphcast_model_dir
       }
       env {
-        name  = "NEURALGCM_MODEL_DIR"
-        value = var.neuralgcm_model_dir
+        name  = "INDIA_IFS_MODEL_DIR"
+        value = var.india_ifs_model_dir
+      }
+      env {
+        name  = "INDIA_NEURALGCM_MODEL_DIR"
+        value = var.india_neuralgcm_model_dir
+      }
+      env {
+        name  = "ETHIOPIA_AIFS_MODEL_DIR"
+        value = var.ethiopia_aifs_model_dir
+      }
+      env {
+        name  = "ETHIOPIA_FUXI_MODEL_DIR"
+        value = var.ethiopia_fuxi_model_dir
+      }
+      env {
+        name  = "ETHIOPIA_GENCAST_MODEL_DIR"
+        value = var.ethiopia_gencast_model_dir
+      }
+      env {
+        name  = "ETHIOPIA_GRAPHCAST_MODEL_DIR"
+        value = var.ethiopia_graphcast_model_dir
       }
     }
   }

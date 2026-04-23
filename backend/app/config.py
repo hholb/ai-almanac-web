@@ -1,10 +1,17 @@
+import os
 from pathlib import Path
 
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _MODELS_YAML = Path(__file__).parent / "config" / "models.yaml"
+_DATASETS_YAML = Path(__file__).parent / "config" / "datasets.yaml"
 _ROMP_YAML = Path(__file__).parent / "config" / "romp.yaml"
+
+
+def _env_key(*parts: str) -> str:
+    """Join parts into an uppercase env var name, e.g. ("india", "fuxi", "model_dir") → INDIA_FUXI_MODEL_DIR."""
+    return "_".join(p for p in parts if p).upper().replace("-", "_")
 
 
 class Settings(BaseSettings):
@@ -95,31 +102,11 @@ class Settings(BaseSettings):
     globus_client_secret: str = ""
 
     # ---------------------------------------------------------------------------
-    # Demo datasets and model directories
-    # In production these are GCS URIs (gs://almanac-data/obs/... etc.).
-    # In local dev they are absolute paths on the developer's machine.
+    # Model directories and demo dataset paths
+    # Resolved dynamically from env vars derived from models.yaml / datasets.yaml.
+    # See get_model_registry() and get_demo_datasets() below.
+    # Pattern: {REGION}_{ID}_MODEL_DIR  /  {ID}_OBS_DIR
     # ---------------------------------------------------------------------------
-    demo_obs_datasets: str = ""
-
-    # India model directories
-    india_aifs_model_dir: str = ""
-    india_aifs_daily_model_dir: str = ""
-    india_ifs_model_dir: str = ""
-    india_neuralgcm_model_dir: str = ""
-    india_fuxi_model_dir: str = ""
-    india_graphcast_model_dir: str = ""
-    india_gencast_model_dir: str = ""
-    india_fuxi_s2s_model_dir: str = ""
-
-    # Test model — points at testdata/ for local dev smoke testing.
-    # Empty in production so the model is excluded from the registry.
-    test_fuxi_model_dir: str = ""
-
-    # Ethiopia model directories
-    ethiopia_aifs_model_dir: str = ""
-    ethiopia_fuxi_model_dir: str = ""
-    ethiopia_graphcast_model_dir: str = ""
-    ethiopia_gencast_model_dir: str = ""
 
 
 settings = Settings()
@@ -131,14 +118,19 @@ settings = Settings()
 
 
 def get_model_registry() -> list[dict]:
-    """Load model definitions from models.yaml and resolve model_dir from settings."""
+    """Load model definitions from models.yaml; resolve model_dir from env vars.
+
+    Env var pattern: {REGION}_{ID}_MODEL_DIR (uppercased, hyphens → underscores).
+    Models whose env var is unset or empty are excluded.
+    """
     raw = yaml.safe_load(_MODELS_YAML.read_text())
     result = []
     for entry in raw:
-        model_dir = getattr(settings, entry["model_dir_setting"], "")
+        env_key = _env_key(entry["region"], entry["id"], "model_dir")
+        model_dir = os.environ.get(env_key, "")
         if not model_dir:
             continue
-        m = {k: v for k, v in entry.items() if k != "model_dir_setting"}
+        m = dict(entry)
         m["model_dir"] = model_dir
         result.append(m)
     return result
@@ -167,35 +159,24 @@ def get_metric_definitions() -> list[dict]:
 
 
 def get_demo_datasets() -> list[dict]:
+    """Load demo dataset definitions from datasets.yaml; resolve obs_dir from env vars.
+
+    Env var pattern: {ID}_OBS_DIR (uppercased, hyphens → underscores).
+    Datasets whose env var is unset or empty are excluded.
     """
-    Parse demo_obs_datasets setting into a list of dataset descriptors.
-    Format: comma-separated "Name=path" or "Name=path|obs_file_pattern" pairs.
-    Paths can be local filesystem paths (dev) or gs:// URIs (production).
-    """
+    raw = yaml.safe_load(_DATASETS_YAML.read_text())
     result = []
-    for entry in settings.demo_obs_datasets.split(","):
-        entry = entry.strip()
-        if not entry or "=" not in entry:
+    for entry in raw:
+        env_key = _env_key(entry["id"], "obs_dir")
+        obs_dir = os.environ.get(env_key, "")
+        if not obs_dir:
             continue
-        name, _, rest = entry.partition("=")
-        name = name.strip()
-        if "|" in rest:
-            path, _, obs_file_pattern = rest.partition("|")
-            path = path.strip()
-            obs_file_pattern = obs_file_pattern.strip() or None
-        else:
-            path = rest.strip()
-            obs_file_pattern = None
-        if name and path:
-            demo_id = "demo:" + name.lower().replace(" ", "-").replace("(", "").replace(
-                ")", ""
-            ).replace("°", "deg")
-            result.append(
-                {
-                    "id": demo_id,
-                    "name": name,
-                    "obs_dir": path,
-                    "obs_file_pattern": obs_file_pattern,
-                }
-            )
+        result.append(
+            {
+                "id": "demo:" + entry["id"],
+                "name": entry["name"],
+                "obs_dir": obs_dir,
+                "obs_file_pattern": entry.get("obs_file_pattern"),
+            }
+        )
     return result
