@@ -632,10 +632,10 @@ async def _exec_run_code_sandbox(args: dict, user_id: str, scope: ChatScope) -> 
 
     try:
         result = await asyncio.to_thread(_run)
-        return result
+        return result if isinstance(result, str) else json.dumps(result)
     except Exception as exc:
         logger.exception("run_code_sandbox failed")
-        return {"ok": False, "error": str(exc)}
+        return json.dumps({"ok": False, "error": str(exc)})
 
 
 async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
@@ -669,10 +669,10 @@ async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
 
     try:
         result = await asyncio.to_thread(_run)
-        return result
+        return result if isinstance(result, str) else json.dumps(result)
     except Exception as exc:
-        logger.exception("run_code sandbox failed")
-        return {"ok": False, "error": str(exc)}
+        logger.exception("run_code failed")
+        return json.dumps({"ok": False, "error": str(exc)})
 
 
 # Registry — add new tools here without touching the streaming logic.
