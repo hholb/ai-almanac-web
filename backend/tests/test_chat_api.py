@@ -251,3 +251,79 @@ async def test_send_message_refreshes_scope_job_ids(
     )
     assert detail_response.status_code == 200
     assert detail_response.json()["scope"]["job_ids"] == [job_id]
+
+
+@pytest.mark.asyncio
+async def test_run_code_sandbox_preserves_figure_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.chat_state import ChatArtifact, ChatScope
+    from app.services.llm import execute_tool
+
+    artifact_bytes = b"fake-webp-bytes"
+
+    class FakeModalFunction:
+        def remote(self, code: str) -> dict:
+            assert "compute" in code
+            return {
+                "ok": True,
+                "result": {"summary": "created plot"},
+                "artifacts": [
+                    {
+                        "kind": "figure",
+                        "filename": "plot.webp",
+                        "label": "Plot",
+                        "media_type": "image/webp",
+                        "data": artifact_bytes,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr("app.config.settings.enable_run_code_sandbox", True)
+    monkeypatch.setattr("app.config.settings.modal_token_id", "token-id")
+    monkeypatch.setattr("app.config.settings.modal_token_secret", "token-secret")
+    monkeypatch.setattr("modal.Function.from_name", lambda *args: FakeModalFunction())
+
+    async def fake_create_chat_figure_artifact(
+        session_id: str,
+        user_id: str,
+        data: bytes,
+        *,
+        label: str | None = None,
+        filename: str | None = None,
+        media_type: str | None = None,
+    ) -> ChatArtifact:
+        assert session_id == "session-1"
+        assert user_id == "user-1"
+        assert data == artifact_bytes
+        return ChatArtifact(
+            id="artifact-1",
+            kind="figure",
+            url="/chat/figures/artifact-1/public?exp=1&sig=test",
+            label=label,
+            filename=filename,
+            media_type=media_type,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(
+        "app.services.llm.create_chat_figure_artifact",
+        fake_create_chat_figure_artifact,
+    )
+
+    result = await execute_tool(
+        "run_code_sandbox",
+        {"code": "def compute() -> dict:\n    return {}"},
+        "user-1",
+        ChatScope(key="group-1"),
+        "session-1",
+    )
+
+    assert result.parsed["ok"] is True
+    assert result.parsed["result"] == {"summary": "created plot"}
+    assert len(result.parsed["artifacts"]) == 1
+    assert result.parsed["artifacts"][0]["id"] == "artifact-1"
+    assert result.parsed["artifacts"][0]["label"] == "Plot"
+    assert result.parsed["artifacts"][0]["filename"] == "plot.webp"
+    assert len(result.artifacts) == 1
+    assert result.artifacts[0].id == "artifact-1"

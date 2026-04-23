@@ -679,7 +679,9 @@ async def _exec_get_spatial_summary(args: dict, user_id: str, scope: ChatScope) 
     return json.dumps(result)
 
 
-async def _exec_run_code_sandbox(args: dict, user_id: str, scope: ChatScope) -> str:
+async def _exec_run_code_sandbox(
+    args: dict, user_id: str, scope: ChatScope
+) -> dict | str:
     reason = _tool_unavailable_reason("run_code_sandbox")
     if reason:
         return json.dumps({"error": reason})
@@ -694,13 +696,13 @@ async def _exec_run_code_sandbox(args: dict, user_id: str, scope: ChatScope) -> 
 
     try:
         result = await asyncio.to_thread(_run)
-        return result if isinstance(result, str) else json.dumps(result)
+        return result
     except Exception as exc:
         logger.exception("run_code_sandbox failed")
         return json.dumps({"ok": False, "error": str(exc)})
 
 
-async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
+async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> dict | str:
     from ..database import get_db
     from ..services.storage import get_storage
 
@@ -738,7 +740,7 @@ async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
 
     try:
         result = await asyncio.to_thread(_run)
-        return result if isinstance(result, str) else json.dumps(result)
+        return result
     except Exception as exc:
         logger.exception("run_code failed")
         return json.dumps({"ok": False, "error": str(exc)})
