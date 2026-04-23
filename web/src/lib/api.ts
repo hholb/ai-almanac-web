@@ -406,6 +406,7 @@ export type ChatEvent =
   | { type: "tool_call"; turn_id: string; tool_call: ChatToolCall }
   | { type: "tool_result"; turn_id: string; tool_call_id: string; status: ChatToolCall["status"]; result: unknown }
   | { type: "artifact"; turn_id: string; tool_call_id: string; artifact: ChatArtifact }
+  | { type: "error"; message: string; retryable?: boolean }
   | { type: "done"; turn: ChatMessage };
 
 export async function createChatSession(
@@ -427,6 +428,16 @@ export async function getChatSessions(scope?: ChatScope): Promise<ChatSession[]>
 
 export async function getChatSession(id: string): Promise<ChatSessionDetail> {
   return request<ChatSessionDetail>(`/chat/sessions/${id}`);
+}
+
+export async function updateChatSession(
+  id: string,
+  updates: { title?: string | null }
+): Promise<ChatSession> {
+  return request<ChatSession>(`/chat/sessions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  });
 }
 
 export async function deleteChatSession(id: string): Promise<void> {
@@ -453,6 +464,16 @@ export async function* sendChatMessage(
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let sawTerminalEvent = false;
+
+  const parseLine = (line: string): ChatEvent | null => {
+    if (!line.startsWith("data: ")) return null;
+    try {
+      return JSON.parse(line.slice(6)) as ChatEvent;
+    } catch {
+      return null;
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -461,13 +482,25 @@ export async function* sendChatMessage(
     const lines = buffer.split("\n");
     buffer = lines.pop()!;
     for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        try {
-          yield JSON.parse(line.slice(6)) as ChatEvent;
-        } catch {
-          // malformed chunk — skip
-        }
+      const event = parseLine(line);
+      if (!event) continue;
+      yield event;
+      if (event.type === "done" || event.type === "error") {
+        sawTerminalEvent = true;
+        return;
       }
     }
+  }
+
+  const finalEvent = parseLine(buffer.trimEnd());
+  if (finalEvent) {
+    yield finalEvent;
+    if (finalEvent.type === "done" || finalEvent.type === "error") {
+      sawTerminalEvent = true;
+    }
+  }
+
+  if (!sawTerminalEvent) {
+    throw new Error("Chat stream ended before a terminal event was received.");
   }
 }

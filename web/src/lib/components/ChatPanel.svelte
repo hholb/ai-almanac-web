@@ -9,6 +9,7 @@
     createChatSession,
     getChatSessions,
     getChatSession,
+    updateChatSession,
     deleteChatSession,
     sendChatMessage,
     type ChatSession,
@@ -49,6 +50,10 @@
   let error = $state<string | null>(null);
   let loadingSession = $state(false);
   let showSessionList = $state(false);
+  let renamingSessionId = $state<string | null>(null);
+  let renamingValue = $state("");
+  let savingTitle = $state(false);
+  let sendLocked = false;
 
   // Streaming assistant turn
   let streamingTurn = $state<ChatMessage | null>(null);
@@ -70,13 +75,42 @@
     await navigator.clipboard.writeText(code);
   }
 
+  function titleCase(value: string): string {
+    return value
+      .split(/[\s_-]+/)
+      .filter(Boolean)
+      .map((part) => part[0].toUpperCase() + part.slice(1).toLowerCase())
+      .join(" ");
+  }
+
+  function formatDateForTitle(value?: string): string | null {
+    if (!value) return null;
+    const date = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  function defaultSessionTitle(scope: Pick<ChatScope, "key">): string {
+    const firstJob = jobs[0];
+    const eventType = titleCase(firstJob?.params?.event_type ?? "benchmark");
+    const region = titleCase(firstJob?.params?.region ?? scope.key);
+    const start = formatDateForTitle(firstJob?.params?.start_date);
+    const end = formatDateForTitle(firstJob?.params?.end_date);
+    const dateRange = start && end ? `${start} to ${end}` : start ?? end;
+    const modelCount = jobs.length;
+    const modelLabel = `${modelCount} model${modelCount === 1 ? "" : "s"}`;
+    return dateRange
+      ? `${eventType} · ${region} · ${modelLabel} · ${dateRange}`
+      : `${eventType} · ${region} · ${modelLabel}`;
+  }
+
   function sessionScope(): ChatScope {
-    return {
+    const scope = {
       kind: "benchmark_run_group",
       key: scopeKey,
-      title: jobs.map((j) => j.model_name.toUpperCase()).join(", "),
       job_ids: jobs.map((j) => j.id),
-    };
+    } satisfies Omit<ChatScope, "title">;
+    return { ...scope, title: defaultSessionTitle(scope) };
   }
 
   function codeForToolCall(toolCall: ChatToolCall): string | null {
@@ -214,13 +248,54 @@
     try {
       const scope = sessionScope();
       const session = await createChatSession(scope, scope.title ?? undefined);
-      sessions = [session, ...sessions];
+      sessions = [session, ...sessions].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
       sessionId = session.id;
       messages = [];
     } catch {
       error = "Failed to create session.";
     }
     showSessionList = false;
+  }
+
+  function beginRename(session: ChatSession, e?: MouseEvent) {
+    e?.stopPropagation();
+    renamingSessionId = session.id;
+    renamingValue = session.title ?? "";
+    showSessionList = false;
+  }
+
+  function cancelRename() {
+    renamingSessionId = null;
+    renamingValue = "";
+  }
+
+  async function saveRename() {
+    if (!renamingSessionId || savingTitle) return;
+    savingTitle = true;
+    error = null;
+    try {
+      const updated = await updateChatSession(renamingSessionId, { title: renamingValue.trim() || null });
+      sessions = sessions
+        .map((s) => (s.id === updated.id ? updated : s))
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      cancelRename();
+    } catch {
+      error = "Failed to rename session.";
+    } finally {
+      savingTitle = false;
+    }
+  }
+
+  function handleRenameKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void saveRename();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelRename();
+    }
   }
 
   async function handleDeleteSession(id: string, e: MouseEvent) {
@@ -246,8 +321,7 @@
   }
 
   function sessionLabel(s: ChatSession): string {
-    if (s.title) return s.title;
-    return `Chat ${new Date(s.created_at).toLocaleDateString()}`;
+    return s.title || s.scope.title || `Chat ${new Date(s.created_at).toLocaleDateString()}`;
   }
 
   // Scroll to bottom whenever messages update.
@@ -259,7 +333,9 @@
   });
 
   async function submit() {
-    if (!input.trim() || sending || !sessionId) return;
+    if (!input.trim() || sending || sendLocked || !sessionId) return;
+    sendLocked = true;
+    const activeSessionId = sessionId;
     const text = input.trim();
     input = "";
     sending = true;
@@ -274,7 +350,7 @@
     }];
 
     try {
-      for await (const event of sendChatMessage(sessionId, text)) {
+      for await (const event of sendChatMessage(activeSessionId, text)) {
         if (event.type === "text_delta") {
           if (!streamingTurn || streamingTurn.id !== event.turn_id) {
             streamingTurn = {
@@ -321,19 +397,25 @@
                 : tc
             ),
           };
+        } else if (event.type === "error") {
+          throw new Error(event.message || "Chat request failed.");
         } else if (event.type === "done") {
           messages = [...messages, mergeArtifacts(streamingTurn, event.turn)];
           streamingTurn = null;
           // Update session's message_count in the list
           sessions = sessions.map((s) =>
-            s.id === sessionId ? { ...s, message_count: s.message_count + 2, updated_at: new Date().toISOString() } : s
-          );
+            s.id === activeSessionId ? { ...s, message_count: s.message_count + 2, updated_at: new Date().toISOString() } : s
+          ).sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
         }
       }
     } catch (e: any) {
-      error = e.message ?? "An error occurred.";
+      const message = e.message ?? "An error occurred.";
+      streamingTurn = null;
+      await loadSession(activeSessionId);
+      error = message;
     } finally {
       sending = false;
+      sendLocked = false;
     }
   }
 
@@ -375,20 +457,38 @@
   <div class="chat-header">
     <span class="ai-badge">✦ AI</span>
     <div class="session-selector">
-      <button
-        class="session-current"
-        onclick={() => { showSessionList = !showSessionList; }}
-        title="Switch session"
-      >
-        <span class="session-label">
-          {#if currentSession()}
-            {sessionLabel(currentSession()!)}
-          {:else}
-            AI Analysis
-          {/if}
-        </span>
-        <span class="session-chevron" class:open={showSessionList}>▾</span>
-      </button>
+      {#if currentSession() && renamingSessionId === currentSession()!.id}
+        <div class="session-rename-bar">
+          <input
+            class="session-rename-input"
+            bind:value={renamingValue}
+            onkeydown={handleRenameKeydown}
+            placeholder={sessionLabel(currentSession()!)}
+            maxlength="140"
+          />
+          <button class="session-action-btn" onclick={() => void saveRename()} disabled={savingTitle}>
+            {savingTitle ? "Saving..." : "Save"}
+          </button>
+          <button class="session-action-btn secondary" onclick={cancelRename} disabled={savingTitle}>
+            Cancel
+          </button>
+        </div>
+      {:else}
+        <button
+          class="session-current"
+          onclick={() => { showSessionList = !showSessionList; }}
+          title="Switch session"
+        >
+          <span class="session-label">
+            {#if currentSession()}
+              {sessionLabel(currentSession()!)}
+            {:else}
+              AI Analysis
+            {/if}
+          </span>
+          <span class="session-chevron" class:open={showSessionList}>▾</span>
+        </button>
+      {/if}
 
       {#if showSessionList}
         <div class="session-dropdown">
@@ -404,6 +504,11 @@
                   <span class="session-item-meta">{s.message_count} msg · {new Date(s.updated_at).toLocaleDateString()}</span>
                 </button>
                 <button
+                  class="session-item-rename"
+                  title="Rename"
+                  onclick={(e) => beginRename(s, e)}
+                >Rename</button>
+                <button
                   class="session-item-delete"
                   title="Delete"
                   onclick={(e) => handleDeleteSession(s.id, e)}
@@ -416,6 +521,15 @@
     </div>
 
     <div class="header-actions">
+      {#if currentSession() && renamingSessionId !== currentSession()!.id}
+        <button
+          class="copy-btn"
+          onclick={(e) => beginRename(currentSession()!, e)}
+          title="Rename chat"
+        >
+          Rename
+        </button>
+      {/if}
       <button
         class="copy-btn"
         onclick={copyChat}
@@ -735,6 +849,60 @@
     background: var(--color-accent-light);
   }
 
+  .session-rename-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+  }
+
+  .session-rename-input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--color-accent-border);
+    border-radius: 5px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font: inherit;
+    font-size: 0.82rem;
+  }
+
+  .session-rename-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+
+  .session-action-btn {
+    padding: 0.35rem 0.65rem;
+    border: 1px solid var(--color-accent-border);
+    border-radius: 5px;
+    background: var(--color-accent-light);
+    color: var(--color-accent);
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.12s, background-color 0.12s, color 0.12s;
+    white-space: nowrap;
+  }
+
+  .session-action-btn.secondary {
+    border-color: var(--color-border);
+    background: transparent;
+    color: var(--color-text-muted);
+  }
+
+  .session-action-btn:not(:disabled):hover {
+    border-color: var(--color-accent);
+    background: var(--color-accent-glow);
+  }
+
+  .session-action-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
   .session-label {
     flex: 1;
     min-width: 0;
@@ -844,6 +1012,23 @@
     flex-shrink: 0;
   }
   .session-item-delete:hover { color: var(--color-danger); background: var(--color-danger-bg); }
+
+  .session-item-rename {
+    padding: 0 0.5rem;
+    background: none;
+    border: none;
+    color: var(--color-text-muted);
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.12s, background-color 0.12s;
+    flex-shrink: 0;
+  }
+
+  .session-item-rename:hover {
+    color: var(--color-accent);
+    background: var(--color-accent-light);
+  }
 
   /* Messages */
   .messages {
