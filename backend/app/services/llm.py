@@ -1,8 +1,8 @@
 """
 LLM service — OpenAI-compatible client with tool definitions for job data access.
 
-Provider is configured via LLM_BASE_URL / LLM_MODEL / LLM_API_KEY. Any
-OpenAI-compatible endpoint works (Anthropic, Modal vLLM, Ollama, etc.).
+Provider is configured via LLM_BASE_URL / LLM_MODEL / LLM_API_KEY. The current
+implementation targets OpenAI chat-completions-compatible endpoints.
 
 Tools give the LLM structured access to job results without pre-loading
 everything into the prompt. Add new tools to TOOLS and _EXECUTORS.
@@ -208,6 +208,8 @@ TOOLS: list[dict] = [
     },
 ]
 
+_CODE_TOOL_NAMES = {"run_code", "run_code_sandbox"}
+
 SYSTEM_PROMPT = """You are an expert in AI weather prediction and monsoon onset forecasting, \
 helping researchers interpret benchmark results from ROMP (Rainfall Onset Metrics Package).
 
@@ -257,6 +259,104 @@ multi-section responses.
 - Be concise. These are researchers who understand statistics — skip obvious interpretation \
 and get to the insight.
 - When uncertain about what a metric value means in context, say so explicitly."""
+
+
+def _tool_unavailable_reason(name: str) -> str | None:
+    from ..config import settings
+
+    if name == "run_code_sandbox":
+        if not settings.enable_run_code_sandbox:
+            return "run_code_sandbox is disabled by configuration"
+        if not settings.modal_token_id or not settings.modal_token_secret:
+            return "run_code_sandbox requires Modal credentials and is not available in local dev by default"
+        return None
+
+    if name == "run_code":
+        if not settings.enable_run_code:
+            return "run_code is disabled by configuration"
+        if settings.storage_backend.lower() != "gcs":
+            return "run_code requires GCS storage and is not available in local dev mode"
+        if not settings.gcs_outputs_bucket:
+            return "run_code requires a configured GCS outputs bucket"
+        if not settings.modal_token_id or not settings.modal_token_secret:
+            return "run_code requires Modal credentials"
+        return None
+
+    return None
+
+
+def get_available_tools() -> list[dict]:
+    return [
+        tool
+        for tool in TOOLS
+        if _tool_unavailable_reason(tool["function"]["name"]) is None
+    ]
+
+
+def _truncate_for_context(text: str, max_chars: int, label: str) -> str:
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    truncated = text[:max_chars].rstrip()
+    return f"{truncated}\n\n[{label} truncated for provider context; omitted {omitted} characters]"
+
+
+def _compact_tool_arguments(arguments: str, name: str) -> str:
+    from ..config import settings
+
+    if name not in _CODE_TOOL_NAMES or not arguments:
+        return arguments
+    try:
+        payload = json.loads(arguments)
+    except json.JSONDecodeError:
+        return _truncate_for_context(arguments, settings.llm_code_context_max_chars, f"{name} arguments")
+
+    code = payload.get("code")
+    if isinstance(code, str):
+        compact_code = _truncate_for_context(code, settings.llm_code_context_max_chars, f"{name} code")
+        if compact_code != code:
+            payload["code"] = compact_code
+            payload["code_truncated_for_context"] = True
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def _compact_provider_message(message: dict) -> dict:
+    from ..config import settings
+
+    compact = dict(message)
+    role = compact.get("role")
+
+    if role == "tool" and isinstance(compact.get("content"), str):
+        compact["content"] = _truncate_for_context(
+            compact["content"],
+            settings.llm_tool_result_max_chars,
+            "tool result",
+        )
+
+    tool_calls = compact.get("tool_calls")
+    if isinstance(tool_calls, list):
+        compact["tool_calls"] = []
+        for tool_call in tool_calls:
+            tool_call_copy = dict(tool_call)
+            function = dict(tool_call_copy.get("function") or {})
+            name = str(function.get("name") or "")
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                function["arguments"] = _compact_tool_arguments(arguments, name)
+            tool_call_copy["function"] = function
+            compact["tool_calls"].append(tool_call_copy)
+
+    return compact
+
+
+def assemble_provider_messages(messages: list[dict]) -> list[dict]:
+    """
+    Build the prompt context sent to the model from durable session state.
+
+    This keeps transcript storage richer than provider context by compacting
+    historical tool payloads and code-heavy tool arguments before reuse.
+    """
+    return [_compact_provider_message(message) for message in messages]
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +619,9 @@ async def _exec_get_spatial_summary(args: dict, user_id: str, scope: ChatScope) 
 
 
 async def _exec_run_code_sandbox(args: dict, user_id: str, scope: ChatScope) -> str:
-    import asyncio
+    reason = _tool_unavailable_reason("run_code_sandbox")
+    if reason:
+        return json.dumps({"error": reason})
 
     code = args["code"]
 
@@ -540,6 +642,10 @@ async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
     from ..database import get_db
     from ..services.storage import get_storage
 
+    reason = _tool_unavailable_reason("run_code")
+    if reason:
+        return json.dumps({"error": reason})
+
     job_id = args["job_id"]
     code = args["code"]
 
@@ -555,8 +661,6 @@ async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
         return json.dumps({"error": f"Job {job_id} is not complete"})
 
     storage = get_storage()
-    if storage.is_local:
-        return json.dumps({"error": "run_code requires GCS storage — not available in local dev mode"})
 
     def _run():
         import modal
@@ -653,7 +757,11 @@ def get_client():
     from ..config import settings
     if not settings.llm_base_url:
         raise RuntimeError("LLM_BASE_URL is not configured")
-    return AsyncOpenAI(base_url=settings.llm_base_url, api_key=settings.llm_api_key)
+    return AsyncOpenAI(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        timeout=settings.llm_timeout_seconds,
+    )
 
 
 async def stream_response(
@@ -674,6 +782,8 @@ async def stream_response(
 
     client = get_client()
     working_messages = list(messages)
+    consumed_prefix_len = len(working_messages)
+    active_tools = get_available_tools()
     turn = ChatTurn(id=new_turn_id(), role="assistant", content="", created_at=utc_now())
 
     while True:
@@ -682,12 +792,20 @@ async def stream_response(
         tool_calls: list[dict] = []
         current_tool: dict | None = None
 
+        create_params = {
+            "model": settings.llm_model,
+            "messages": (
+                assemble_provider_messages(working_messages[:consumed_prefix_len])
+                + working_messages[consumed_prefix_len:]
+            ),
+            "stream": True,
+        }
+        if active_tools:
+            create_params["tools"] = active_tools
+            create_params["tool_choice"] = "auto"
+
         stream = await client.chat.completions.create(
-            model=settings.llm_model,
-            messages=working_messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            stream=True,
+            **create_params,
         )
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -723,13 +841,16 @@ async def stream_response(
         # If no tool calls, we're done — append the final assistant message and emit
         if not tool_calls:
             turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
-            working_messages.append(response_message)
+            final_provider_state = assemble_provider_messages(working_messages)
+            final_provider_state.append(_compact_provider_message(response_message))
             yield json.dumps({
                 "type": "done",
-                "provider_state": working_messages,
+                "provider_state": final_provider_state,
                 "turn": turn.model_dump(mode="json"),
             })
             return
+
+        consumed_prefix_len = len(working_messages)
 
         # Append the assistant message with tool calls
         response_message["tool_calls"] = tool_calls

@@ -69,15 +69,19 @@ class Settings(BaseSettings):
     modal_token_secret: str = ""
 
     # ---------------------------------------------------------------------------
-    # LLM — OpenAI-compatible client; point at any provider by changing these.
+    # LLM — OpenAI chat-completions-compatible client.
     # Examples:
-    #   Anthropic:  llm_base_url="https://api.anthropic.com/v1", llm_model="claude-sonnet-4-6"
     #   Modal vLLM: llm_base_url="https://xxx--almanac-llm.modal.run/v1", llm_model="Qwen/Qwen2.5-Coder-7B-Instruct"
     #   Ollama:     llm_base_url="http://localhost:11434/v1", llm_model="qwen2.5-coder"
     # ---------------------------------------------------------------------------
     llm_base_url: str = ""
     llm_model: str = "claude-sonnet-4-6"
     llm_api_key: str = "placeholder"
+    llm_timeout_seconds: float = 60.0
+    llm_tool_result_max_chars: int = 12000
+    llm_code_context_max_chars: int = 6000
+    enable_run_code: bool = True
+    enable_run_code_sandbox: bool = True
     chat_figure_signing_secret: str = "dev-chat-figure-secret"
 
     # ---------------------------------------------------------------------------
