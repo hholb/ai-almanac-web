@@ -449,12 +449,13 @@ export async function deleteChatSession(id: string): Promise<void> {
  */
 export async function* sendChatMessage(
   sessionId: string,
-  content: string
+  content: string,
+  scope?: ChatScope
 ): AsyncGenerator<ChatEvent> {
   const res = await fetch(`${BASE_URL}/chat/sessions/${sessionId}/message`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, scope }),
   });
   if (!res.ok) {
     const body = await res.text();

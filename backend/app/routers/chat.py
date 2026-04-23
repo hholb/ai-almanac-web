@@ -19,12 +19,16 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from ..auth import CurrentUser
 from ..config import settings
 from ..database import get_db
-from ..services.chat_artifacts import hydrate_turn_artifact_urls, verify_chat_figure_signature
+from ..services.chat_artifacts import (
+    delete_chat_figure_artifact,
+    hydrate_turn_artifact_urls,
+    verify_chat_figure_signature,
+)
 from ..services.chat_state import ChatArtifact, ChatScope, ChatToolCall, ChatTurn
 from ..services.llm import SYSTEM_PROMPT, stream_response
 from ..services.storage import get_storage, guess_chat_figure_media_type
@@ -58,6 +62,7 @@ class SessionDetail(SessionOut):
 
 class MessageIn(BaseModel):
     content: str
+    scope: ChatScope | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -160,20 +165,70 @@ async def _update_session_state(
     provider_state: list[dict],
     transcript: list[dict],
     updated_at: datetime,
+    scope: ChatScope | None = None,
 ) -> None:
+    params = {
+        "provider_state": json.dumps(provider_state),
+        "transcript": json.dumps(transcript),
+        "now": updated_at,
+        "id": session_id,
+    }
+    if scope is None:
+        await conn.execute(
+            text("""
+                UPDATE chat_sessions
+                SET provider_state = :provider_state, transcript = :transcript, updated_at = :now
+                WHERE id = :id
+            """),
+            params,
+        )
+        return
     await conn.execute(
         text("""
             UPDATE chat_sessions
-            SET provider_state = :provider_state, transcript = :transcript, updated_at = :now
+            SET provider_state = :provider_state,
+                transcript = :transcript,
+                scope = :scope,
+                updated_at = :now
             WHERE id = :id
         """),
         {
-            "provider_state": json.dumps(provider_state),
-            "transcript": json.dumps(transcript),
-            "now": updated_at,
-            "id": session_id,
+            **params,
+            "scope": json.dumps(scope.model_dump(mode="json")),
         },
     )
+
+
+def _apply_scope_to_provider_state(provider_state: list[dict], scope: ChatScope) -> list[dict]:
+    system_message = _build_system_message(scope)
+    if provider_state and provider_state[0].get("role") == "system":
+        return [system_message, *provider_state[1:]]
+    return [system_message, *provider_state]
+
+
+async def _validate_scope(scope: ChatScope, user_id: str) -> ChatScope:
+    job_ids = list(dict.fromkeys(scope.job_ids))
+    validated_scope = scope.model_copy(update={"job_ids": job_ids})
+    if not job_ids:
+        return validated_scope
+
+    query = text("""
+        SELECT id
+        FROM jobs
+        WHERE user_id = :uid AND id IN :job_ids
+    """).bindparams(bindparam("job_ids", expanding=True))
+
+    async with get_db() as conn:
+        rows = (await conn.execute(query, {"uid": user_id, "job_ids": job_ids})).mappings().fetchall()
+
+    valid_ids = {row["id"] for row in rows}
+    invalid_ids = [job_id for job_id in job_ids if job_id not in valid_ids]
+    if invalid_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid job IDs for session scope: {', '.join(invalid_ids)}",
+        )
+    return validated_scope
 
 
 def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
@@ -193,6 +248,7 @@ async def _persist_failed_turn(
     pending_transcript: list[dict],
     assistant_turn: ChatTurn,
     exc: BaseException,
+    scope: ChatScope | None = None,
 ) -> None:
     failed_turn = assistant_turn.model_copy(update={
         "status": "failed",
@@ -204,6 +260,7 @@ async def _persist_failed_turn(
         provider_state=pending_provider_state,
         transcript=_replace_turn(pending_transcript, failed_turn),
         updated_at=_now(),
+        scope=scope,
     )
 
 
@@ -343,6 +400,10 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
     if not settings.llm_base_url:
         raise HTTPException(status_code=503, detail="LLM is not configured")
 
+    requested_scope = None
+    if body.scope is not None:
+        requested_scope = await _validate_scope(body.scope, user["id"])
+
     async with get_db() as conn:
         row = (await conn.execute(
             text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :uid"),
@@ -370,7 +431,16 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
 
             provider_state = _json_list(row["provider_state"])
             transcript = _json_list(row["transcript"])
-            scope = ChatScope.model_validate(_json_dict(row["scope"]))
+            stored_scope = ChatScope.model_validate(_json_dict(row["scope"]))
+            if requested_scope is not None:
+                if requested_scope.kind != stored_scope.kind or requested_scope.key != stored_scope.key:
+                    yield _stream_event("error", error_type="scope_mismatch", message="Session scope does not match the current view")
+                    return
+                scope = requested_scope
+            else:
+                scope = stored_scope
+
+            provider_state = _apply_scope_to_provider_state(provider_state, scope)
 
             created_at = _now()
             user_turn = ChatTurn(
@@ -397,6 +467,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                 provider_state=pending_provider_state,
                 transcript=pending_transcript,
                 updated_at=created_at,
+                scope=scope,
             )
         # --- Transaction 1 committed, lock released ---
 
@@ -423,6 +494,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                             provider_state=final_provider_state,
                             transcript=final_transcript,
                             updated_at=_now(),
+                            scope=scope,
                         )
                     hydrated_turn = hydrate_turn_artifact_urls(completed_turn, user["id"])
                     terminal_event = _stream_event("done", turn=hydrated_turn.model_dump(mode="json"))
@@ -442,6 +514,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                         pending_transcript,
                         assistant_turn,
                         exc,
+                        scope,
                     )
             except Exception:
                 pass
@@ -456,6 +529,7 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                         pending_transcript,
                         assistant_turn,
                         exc,
+                        scope,
                     )
                 terminal_event = _stream_event(
                     "error",
@@ -530,10 +604,22 @@ async def get_chat_figure_public(figure_id: str, exp: int, sig: str):
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(session_id: str, user: CurrentUser):
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :uid"),
+        rows = (await conn.execute(
+            text("""
+                SELECT chat_sessions.id, chat_artifacts.storage_key
+                FROM chat_sessions
+                LEFT JOIN chat_artifacts ON chat_artifacts.session_id = chat_sessions.id
+                WHERE chat_sessions.id = :id AND chat_sessions.user_id = :uid
+            """),
             {"id": session_id, "uid": user["id"]},
-        )).fetchone()
-        if not row:
+        )).mappings().fetchall()
+        if not rows:
             raise HTTPException(status_code=404, detail="Session not found")
+        storage_keys = [
+            row["storage_key"]
+            for row in rows
+            if row.get("storage_key")
+        ]
+        for storage_key in storage_keys:
+            await delete_chat_figure_artifact(storage_key)
         await conn.execute(text("DELETE FROM chat_sessions WHERE id = :id"), {"id": session_id})

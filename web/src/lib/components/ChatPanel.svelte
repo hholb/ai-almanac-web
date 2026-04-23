@@ -58,7 +58,7 @@
   // Streaming assistant turn
   let streamingTurn = $state<ChatMessage | null>(null);
   let shownCode = $state<Set<string>>(new Set());
-  let loadedScopeKey = $state<string | null>(null);
+  let loadedScopeToken = $state<string | null>(null);
   let galleryFigures = $derived(sessionFigures());
   let activeTab = $state<"chat" | "artifacts">("chat");
 
@@ -111,6 +111,28 @@
       job_ids: jobs.map((j) => j.id),
     } satisfies Omit<ChatScope, "title">;
     return { ...scope, title: defaultSessionTitle(scope) };
+  }
+
+  function scopeToken(scope: ChatScope): string {
+    const jobIds = [...scope.job_ids].sort().join(",");
+    return `${scope.kind}:${scope.key}:${jobIds}`;
+  }
+
+  async function refreshSessionsForScope() {
+    const scope = sessionScope();
+    const all = await getChatSessions(scope);
+    sessions = all;
+
+    const preferredSessionId =
+      sessionId && all.some((session) => session.id === sessionId)
+        ? sessionId
+        : all[0]?.id ?? null;
+
+    if (preferredSessionId) {
+      await loadSession(preferredSessionId);
+      return;
+    }
+    await createNewSession();
   }
 
   function codeForToolCall(toolCall: ChatToolCall): string | null {
@@ -209,19 +231,14 @@
   });
 
   $effect(() => {
-    const key = scopeKey;
-    if (!key || key === loadedScopeKey) return;
-    loadedScopeKey = key;
+    const scope = sessionScope();
+    const token = scopeToken(scope);
+    if (!scope.key || token === loadedScopeToken) return;
+    loadedScopeToken = token;
     streamingTurn = null;
     void (async () => {
       try {
-        const all = await getChatSessions(sessionScope());
-        sessions = all;
-        if (all.length > 0) {
-          await loadSession(all[0].id);
-        } else {
-          await createNewSession();
-        }
+        await refreshSessionsForScope();
       } catch {
         error = "Failed to load chat sessions.";
       }
@@ -235,6 +252,9 @@
       const detail = await getChatSession(id);
       sessionId = id;
       messages = detail.transcript;
+      sessions = sessions.map((session) => (
+        session.id === id ? { ...session, scope: detail.scope } : session
+      ));
     } catch {
       error = "Failed to load session.";
     } finally {
@@ -251,6 +271,7 @@
       sessions = [session, ...sessions].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
       sessionId = session.id;
       messages = [];
+      loadedScopeToken = scopeToken(scope);
     } catch {
       error = "Failed to create session.";
     }
@@ -350,7 +371,8 @@
     }];
 
     try {
-      for await (const event of sendChatMessage(activeSessionId, text)) {
+      const scope = sessionScope();
+      for await (const event of sendChatMessage(activeSessionId, text, scope)) {
         if (event.type === "text_delta") {
           if (!streamingTurn || streamingTurn.id !== event.turn_id) {
             streamingTurn = {
@@ -404,7 +426,14 @@
           streamingTurn = null;
           // Update session's message_count in the list
           sessions = sessions.map((s) =>
-            s.id === activeSessionId ? { ...s, message_count: s.message_count + 2, updated_at: new Date().toISOString() } : s
+            s.id === activeSessionId
+              ? {
+                  ...s,
+                  message_count: s.message_count + 2,
+                  updated_at: new Date().toISOString(),
+                  scope,
+                }
+              : s
           ).sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
         }
       }
