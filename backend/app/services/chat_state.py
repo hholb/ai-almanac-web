@@ -37,6 +37,8 @@ class ChatTurn(BaseModel):
     role: Literal["user", "assistant"]
     content: str = ""
     created_at: datetime
+    status: Literal["streaming", "completed", "failed"] = "completed"
+    error: str | None = None
     tool_calls: list[ChatToolCall] = Field(default_factory=list)
     artifacts: list[ChatArtifact] = Field(default_factory=list)
 

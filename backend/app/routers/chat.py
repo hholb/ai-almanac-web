@@ -11,6 +11,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
@@ -24,7 +25,7 @@ from ..auth import CurrentUser
 from ..config import settings
 from ..database import get_db
 from ..services.chat_artifacts import hydrate_turn_artifact_urls, verify_chat_figure_signature
-from ..services.chat_state import ChatScope, ChatTurn
+from ..services.chat_state import ChatArtifact, ChatScope, ChatToolCall, ChatTurn
 from ..services.llm import SYSTEM_PROMPT, stream_response
 from ..services.storage import get_storage, guess_chat_figure_media_type
 
@@ -59,6 +60,10 @@ class MessageIn(BaseModel):
     content: str
 
 
+class SessionUpdate(BaseModel):
+    title: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -76,6 +81,130 @@ def _build_system_message(scope: ChatScope) -> dict:
             f"Only use these job IDs unless the scope is explicitly changed: {ids_str}"
         )
     return {"role": "system", "content": content}
+
+
+def _json_list(value: object) -> list[dict]:
+    if isinstance(value, list):
+        return value
+    return json.loads(value or "[]")
+
+
+def _json_dict(value: object) -> dict:
+    if isinstance(value, dict):
+        return value
+    return json.loads(value or "{}")
+
+
+def _replace_turn(transcript: list[dict], turn: ChatTurn) -> list[dict]:
+    turn_payload = turn.model_dump(mode="json")
+    return [
+        turn_payload if existing.get("id") == turn.id else existing
+        for existing in transcript
+    ]
+
+
+def _stream_event(event_type: str, **payload: object) -> str:
+    return f"data: {json.dumps({'type': event_type, **payload})}\n\n"
+
+
+def _append_tool_call(turn: ChatTurn, payload: dict) -> None:
+    tool_call = ChatToolCall.model_validate(payload)
+    if any(existing.id == tool_call.id for existing in turn.tool_calls):
+        return
+    turn.tool_calls.append(tool_call)
+
+
+def _append_artifact(turn: ChatTurn, tool_call_id: str | None, payload: dict) -> None:
+    artifact = ChatArtifact.model_validate(payload)
+    if not any(existing.id == artifact.id for existing in turn.artifacts):
+        turn.artifacts.append(artifact)
+    if not tool_call_id:
+        return
+    for tool_call in turn.tool_calls:
+        if tool_call.id != tool_call_id:
+            continue
+        if any(existing.id == artifact.id for existing in tool_call.artifacts):
+            return
+        tool_call.artifacts.append(artifact)
+        return
+
+
+def _apply_stream_event(turn: ChatTurn, data: dict) -> None:
+    event_type = data.get("type")
+    if event_type == "text_delta":
+        turn.content += data.get("content", "")
+        return
+    if event_type == "tool_call":
+        tool_payload = data.get("tool_call")
+        if isinstance(tool_payload, dict):
+            _append_tool_call(turn, tool_payload)
+        return
+    if event_type == "artifact":
+        artifact_payload = data.get("artifact")
+        if isinstance(artifact_payload, dict):
+            _append_artifact(turn, data.get("tool_call_id"), artifact_payload)
+        return
+    if event_type == "tool_result":
+        tool_call_id = data.get("tool_call_id")
+        for tool_call in turn.tool_calls:
+            if tool_call.id == tool_call_id:
+                tool_call.status = data.get("status", tool_call.status)
+                tool_call.result = data.get("result")
+                return
+
+
+async def _update_session_state(
+    conn,
+    session_id: str,
+    *,
+    provider_state: list[dict],
+    transcript: list[dict],
+    updated_at: datetime,
+) -> None:
+    await conn.execute(
+        text("""
+            UPDATE chat_sessions
+            SET provider_state = :provider_state, transcript = :transcript, updated_at = :now
+            WHERE id = :id
+        """),
+        {
+            "provider_state": json.dumps(provider_state),
+            "transcript": json.dumps(transcript),
+            "now": updated_at,
+            "id": session_id,
+        },
+    )
+
+
+def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
+    message = str(exc).lower()
+    name = exc.__class__.__name__.lower()
+    if "tool" in message or "tool" in name or any(tool.status == "failed" for tool in assistant_turn.tool_calls):
+        return "tool_error"
+    if "openai" in message or "api" in name or "rate limit" in message or "timeout" in message:
+        return "provider_error"
+    return "internal_error"
+
+
+async def _persist_failed_turn(
+    conn,
+    session_id: str,
+    pending_provider_state: list[dict],
+    pending_transcript: list[dict],
+    assistant_turn: ChatTurn,
+    exc: BaseException,
+) -> None:
+    failed_turn = assistant_turn.model_copy(update={
+        "status": "failed",
+        "error": str(exc) or exc.__class__.__name__,
+    })
+    await _update_session_state(
+        conn,
+        session_id,
+        provider_state=pending_provider_state,
+        transcript=_replace_turn(pending_transcript, failed_turn),
+        updated_at=_now(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +306,38 @@ async def get_session(session_id: str, user: CurrentUser):
     )
 
 
+@router.patch("/sessions/{session_id}", response_model=SessionOut)
+async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser):
+    title = body.title.strip() if isinstance(body.title, str) else None
+    if title == "":
+        title = None
+
+    async with get_db() as conn:
+        row = (await conn.execute(
+            text("""
+                UPDATE chat_sessions
+                SET title = :title, updated_at = :now
+                WHERE id = :id AND user_id = :uid
+                RETURNING *
+            """),
+            {"id": session_id, "uid": user["id"], "title": title, "now": _now()},
+        )).mappings().fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    transcript = row["transcript"] if isinstance(row["transcript"], list) else json.loads(row["transcript"] or "[]")
+    scope = row["scope"] if isinstance(row["scope"], dict) else json.loads(row["scope"] or "{}")
+    return SessionOut(
+        id=row["id"],
+        title=row["title"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        message_count=len(transcript),
+        scope=ChatScope.model_validate(scope),
+    )
+
+
 @router.post("/sessions/{session_id}/message")
 async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
     if not settings.llm_base_url:
@@ -184,61 +345,131 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
 
     async with get_db() as conn:
         row = (await conn.execute(
-            text("SELECT provider_state, transcript, scope FROM chat_sessions WHERE id = :id AND user_id = :uid"),
+            text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :uid"),
             {"id": session_id, "uid": user["id"]},
-        )).mappings().fetchone()
+        )).fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    provider_state: list[dict] = (
-        row["provider_state"] if isinstance(row["provider_state"], list)
-        else json.loads(row["provider_state"] or "[]")
-    )
-    transcript: list[dict] = row["transcript"] if isinstance(row["transcript"], list) else json.loads(row["transcript"] or "[]")
-    scope_raw = row["scope"] if isinstance(row["scope"], dict) else json.loads(row["scope"] or "{}")
-    scope = ChatScope.model_validate(scope_raw)
-
-    user_turn = ChatTurn(
-        id=str(uuid.uuid4()),
-        role="user",
-        content=body.content,
-        created_at=_now(),
-    )
-    provider_state.append({"role": "user", "content": body.content})
-
     async def _generate():
-        final_provider_state: list[dict] | None = None
-        assistant_turn: ChatTurn | None = None
+        # --- Transaction 1: read state with row lock, persist user + streaming assistant turn ---
+        async with get_db() as conn:
+            row = (await conn.execute(
+                text("""
+                    SELECT provider_state, transcript, scope
+                    FROM chat_sessions
+                    WHERE id = :id AND user_id = :uid
+                    FOR UPDATE
+                """),
+                {"id": session_id, "uid": user["id"]},
+            )).mappings().fetchone()
+            if not row:
+                yield _stream_event("error", error_type="internal_error", message="Session not found")
+                return
 
-        async for event in stream_response(provider_state, user["id"], session_id, scope):
-            data = json.loads(event)
-            if data["type"] == "done":
-                final_provider_state = data.get("provider_state")
-                assistant_turn = hydrate_turn_artifact_urls(ChatTurn.model_validate(data["turn"]), user["id"])
-                yield f"data: {json.dumps({'type': 'done', 'turn': assistant_turn.model_dump(mode='json')})}\n\n"
-            else:
-                yield f"data: {event}\n\n"
+            provider_state = _json_list(row["provider_state"])
+            transcript = _json_list(row["transcript"])
+            scope = ChatScope.model_validate(_json_dict(row["scope"]))
 
-        if final_provider_state is not None and assistant_turn is not None:
-            next_transcript = transcript + [
+            created_at = _now()
+            user_turn = ChatTurn(
+                id=str(uuid.uuid4()),
+                role="user",
+                content=body.content,
+                created_at=created_at,
+            )
+            assistant_turn = ChatTurn(
+                id=str(uuid.uuid4()),
+                role="assistant",
+                created_at=created_at,
+                status="streaming",
+            )
+
+            pending_provider_state = provider_state + [{"role": "user", "content": body.content}]
+            pending_transcript = transcript + [
                 user_turn.model_dump(mode="json"),
                 assistant_turn.model_dump(mode="json"),
             ]
-            async with get_db() as conn:
-                await conn.execute(
-                    text("""
-                        UPDATE chat_sessions
-                        SET provider_state = :provider_state, transcript = :transcript, updated_at = :now
-                        WHERE id = :id
-                    """),
-                    {
-                        "provider_state": json.dumps(final_provider_state),
-                        "transcript": json.dumps(next_transcript),
-                        "now": _now(),
-                        "id": session_id,
-                    },
+            await _update_session_state(
+                conn,
+                session_id,
+                provider_state=pending_provider_state,
+                transcript=pending_transcript,
+                updated_at=created_at,
+            )
+        # --- Transaction 1 committed, lock released ---
+
+        # --- Stream without holding a DB connection ---
+        terminal_event: str | None = None
+        try:
+            async for event in stream_response(pending_provider_state, user["id"], session_id, scope):
+                data = json.loads(event)
+                if data.get("type") == "done":
+                    completed_turn = ChatTurn.model_validate({
+                        **assistant_turn.model_dump(mode="json"),
+                        **data["turn"],
+                        "id": assistant_turn.id,
+                        "status": "completed",
+                        "error": None,
+                    })
+                    final_provider_state = data.get("provider_state", pending_provider_state)
+                    final_transcript = _replace_turn(pending_transcript, completed_turn)
+                    # --- Transaction 2: persist completed state ---
+                    async with get_db() as conn:
+                        await _update_session_state(
+                            conn,
+                            session_id,
+                            provider_state=final_provider_state,
+                            transcript=final_transcript,
+                            updated_at=_now(),
+                        )
+                    hydrated_turn = hydrate_turn_artifact_urls(completed_turn, user["id"])
+                    terminal_event = _stream_event("done", turn=hydrated_turn.model_dump(mode="json"))
+                    break
+
+                _apply_stream_event(assistant_turn, data)
+                yield f"data: {event}\n\n"
+            else:
+                raise RuntimeError("Chat stream ended without a terminal event")
+        except asyncio.CancelledError as exc:
+            try:
+                async with get_db() as conn:
+                    await _persist_failed_turn(
+                        conn,
+                        session_id,
+                        pending_provider_state,
+                        pending_transcript,
+                        assistant_turn,
+                        exc,
+                    )
+            except Exception:
+                pass
+            return
+        except Exception as exc:
+            try:
+                async with get_db() as conn:
+                    await _persist_failed_turn(
+                        conn,
+                        session_id,
+                        pending_provider_state,
+                        pending_transcript,
+                        assistant_turn,
+                        exc,
+                    )
+                terminal_event = _stream_event(
+                    "error",
+                    error_type=_classify_stream_error(exc, assistant_turn),
+                    message="Chat response failed",
                 )
+            except Exception:
+                terminal_event = _stream_event(
+                    "error",
+                    error_type="internal_persistence_error",
+                    message="Chat response failed and could not be persisted",
+                )
+        if terminal_event is not None:
+            yield terminal_event
 
     return StreamingResponse(
         _generate(),
