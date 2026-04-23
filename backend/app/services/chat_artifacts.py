@@ -96,3 +96,7 @@ async def create_chat_figure_artifact(
         media_type=media_type,
         created_at=created_at,
     )
+
+
+async def delete_chat_figure_artifact(storage_key: str) -> None:
+    await asyncio.to_thread(get_storage().delete_chat_figure, storage_key)

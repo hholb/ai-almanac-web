@@ -57,6 +57,13 @@ def _chat_figure_candidates(base: Path, figure_id: str) -> list[Path]:
     ]
 
 
+def _chat_figure_storage_keys(storage_key: str) -> list[str]:
+    key = Path(storage_key).name
+    if Path(key).suffix:
+        return [f"chat-figures/{key}"]
+    return [f"chat-figures/{key}{ext}" for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")]
+
+
 class StorageBackend(ABC):
     @abstractmethod
     def generate_upload_url(
@@ -126,6 +133,10 @@ class StorageBackend(ABC):
     @abstractmethod
     def chat_figure_redirect_url(self, figure_id: str) -> str | None:
         """Return a signed GCS URL to redirect to, or None for local storage."""
+
+    @abstractmethod
+    def delete_chat_figure(self, storage_key: str) -> None:
+        """Best-effort deletion of a stored chat figure by storage key or figure ID."""
 
     @property
     def is_local(self) -> bool:
@@ -208,6 +219,14 @@ class LocalStorage(StorageBackend):
 
     def chat_figure_redirect_url(self, figure_id: str) -> str | None:
         return None
+
+    def delete_chat_figure(self, storage_key: str) -> None:
+        for candidate_key in _chat_figure_storage_keys(storage_key):
+            path = self._outputs_dir / candidate_key
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
 
     def log_path(self, job_id: str) -> Path:
         p = self._outputs_dir / job_id / "run.log"
@@ -327,6 +346,13 @@ class GCSStorage(StorageBackend):
                     method="GET",
                 )
         return None
+
+    def delete_chat_figure(self, storage_key: str) -> None:
+        for candidate_key in _chat_figure_storage_keys(storage_key):
+            try:
+                self._bucket(self._outputs_bucket).blob(candidate_key).delete()
+            except Exception:
+                continue
 
     def read_log(self, job_id: str) -> str:
         blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/run.log")
