@@ -30,10 +30,11 @@ resource "google_storage_bucket_iam_member" "backend_reads_data" {
   member = "serviceAccount:${google_service_account.backend.email}"
 }
 
-# Read job outputs (to serve signed URLs / proxy result files)
+# Read benchmark outputs and manage chat-generated figure artifacts stored in
+# the same bucket under chat-figures/.
 resource "google_storage_bucket_iam_member" "backend_reads_outputs" {
   bucket = google_storage_bucket.job_outputs.name
-  role   = "roles/storage.objectViewer"
+  role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.backend.email}"
 }
 

@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, status
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import bindparam, text
 
@@ -688,9 +688,10 @@ async def _serve_chat_figure(figure_id: str, user_id: str):
         return FileResponse(
             local_path, media_type=guess_chat_figure_media_type(local_path)
         )
-    redirect_url = storage.chat_figure_redirect_url(storage_key)
-    if redirect_url:
-        return RedirectResponse(redirect_url)
+    figure = await asyncio.to_thread(storage.read_chat_figure, storage_key)
+    if figure is not None:
+        data, media_type = figure
+        return Response(content=data, media_type=media_type)
     raise HTTPException(status_code=404, detail="Figure not found")
 
 

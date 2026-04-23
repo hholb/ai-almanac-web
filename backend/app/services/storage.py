@@ -137,6 +137,10 @@ class StorageBackend(ABC):
         """Return a signed GCS URL to redirect to, or None for local storage."""
 
     @abstractmethod
+    def read_chat_figure(self, figure_id: str) -> tuple[bytes, str] | None:
+        """Return (data, media_type) for a chat figure, or None if not found."""
+
+    @abstractmethod
     def delete_chat_figure(self, storage_key: str) -> None:
         """Best-effort deletion of a stored chat figure by storage key or figure ID."""
 
@@ -227,6 +231,12 @@ class LocalStorage(StorageBackend):
 
     def chat_figure_redirect_url(self, figure_id: str) -> str | None:
         return None
+
+    def read_chat_figure(self, figure_id: str) -> tuple[bytes, str] | None:
+        path = self.chat_figure_local_path(figure_id)
+        if path is None or not path.exists():
+            return None
+        return path.read_bytes(), guess_chat_figure_media_type(path)
 
     def delete_chat_figure(self, storage_key: str) -> None:
         for candidate_key in _chat_figure_storage_keys(storage_key):
@@ -360,6 +370,17 @@ class GCSStorage(StorageBackend):
                     expiration=self._SIGNED_URL_EXPIRY,
                     method="GET",
                 )
+        return None
+
+    def read_chat_figure(self, figure_id: str) -> tuple[bytes, str] | None:
+        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin"):
+            blob = self._bucket(self._outputs_bucket).blob(
+                f"chat-figures/{figure_id}{ext}"
+            )
+            if blob.exists():
+                data = blob.download_as_bytes()
+                media_type = blob.content_type or detect_chat_figure_format(data)[1]
+                return data, media_type
         return None
 
     def delete_chat_figure(self, storage_key: str) -> None:
