@@ -24,6 +24,7 @@ from .config import settings
 
 def _make_engine():
     from sqlalchemy.engine import make_url
+
     url = make_url(settings.database_url)
     # Normalise any postgres driver variant to asyncpg.
     url = url.set(drivername="postgresql+asyncpg")
@@ -33,7 +34,7 @@ def _make_engine():
         url,
         pool_pre_ping=True,
         pool_recycle=1800,  # replace connections older than 30 min
-        pool_timeout=10,    # fail fast if pool is exhausted rather than hanging
+        pool_timeout=10,  # fail fast if pool is exhausted rather than hanging
     )
 
 
@@ -50,16 +51,31 @@ async def get_db():
         yield conn
 
 
-async def get_or_create_user(conn: AsyncConnection, external_id: str, email: str | None = None) -> dict:
-    row = (await conn.execute(
-        text("SELECT * FROM users WHERE external_id = :eid"),
-        {"eid": external_id},
-    )).mappings().fetchone()
+async def get_or_create_user(
+    conn: AsyncConnection, external_id: str, email: str | None = None
+) -> dict:
+    row = (
+        (
+            await conn.execute(
+                text("SELECT * FROM users WHERE external_id = :eid"),
+                {"eid": external_id},
+            )
+        )
+        .mappings()
+        .fetchone()
+    )
     if row:
         return dict(row)
     user_id = str(uuid.uuid4())
     result = await conn.execute(
-        text("INSERT INTO users (id, external_id, email, created_at) VALUES (:id, :eid, :email, :now) RETURNING *"),
-        {"id": user_id, "eid": external_id, "email": email, "now": datetime.now(timezone.utc).isoformat()},
+        text(
+            "INSERT INTO users (id, external_id, email, created_at) VALUES (:id, :eid, :email, :now) RETURNING *"
+        ),
+        {
+            "id": user_id,
+            "eid": external_id,
+            "email": email,
+            "now": datetime.now(timezone.utc).isoformat(),
+        },
     )
     return dict(result.mappings().fetchone())

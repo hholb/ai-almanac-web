@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+
 class ChatScope(BaseModel):
     kind: Literal["benchmark_run_group", "job_set"] = "benchmark_run_group"
     key: str

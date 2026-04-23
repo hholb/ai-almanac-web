@@ -47,12 +47,16 @@ async def client(
     from app.main import app
 
     monkeypatch.setattr(db_mod, "engine", _test_engine)
-    monkeypatch.setattr("app.routers.chat.settings.llm_base_url", "http://test-llm.local")
+    monkeypatch.setattr(
+        "app.routers.chat.settings.llm_base_url", "http://test-llm.local"
+    )
     monkeypatch.setattr("app.auth.settings.globus_client_id", "")
     monkeypatch.setattr("app.auth.settings.globus_client_secret", "")
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as async_client:
         yield async_client
 
 
@@ -65,18 +69,30 @@ async def auth_headers(_test_engine: AsyncEngine) -> AsyncIterator[dict[str, str
     finally:
         async with _test_engine.begin() as conn:
             user_row = (
-                await conn.execute(
-                    text("SELECT id FROM users WHERE external_id = :eid"),
-                    {"eid": external_id},
+                (
+                    await conn.execute(
+                        text("SELECT id FROM users WHERE external_id = :eid"),
+                        {"eid": external_id},
+                    )
                 )
-            ).mappings().fetchone()
+                .mappings()
+                .fetchone()
+            )
             if not user_row:
                 return
             uid = user_row["id"]
-            await conn.execute(text("DELETE FROM chat_artifacts WHERE user_id = :uid"), {"uid": uid})
-            await conn.execute(text("DELETE FROM chat_sessions WHERE user_id = :uid"), {"uid": uid})
-            await conn.execute(text("DELETE FROM jobs WHERE user_id = :uid"), {"uid": uid})
-            await conn.execute(text("DELETE FROM datasets WHERE user_id = :uid"), {"uid": uid})
+            await conn.execute(
+                text("DELETE FROM chat_artifacts WHERE user_id = :uid"), {"uid": uid}
+            )
+            await conn.execute(
+                text("DELETE FROM chat_sessions WHERE user_id = :uid"), {"uid": uid}
+            )
+            await conn.execute(
+                text("DELETE FROM jobs WHERE user_id = :uid"), {"uid": uid}
+            )
+            await conn.execute(
+                text("DELETE FROM datasets WHERE user_id = :uid"), {"uid": uid}
+            )
             await conn.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": uid})
 
 
@@ -92,10 +108,14 @@ async def user_id(
     external_id = auth_headers["Authorization"].removeprefix("Bearer ")
     async with _test_engine.begin() as conn:
         row = (
-            await conn.execute(
-                text("SELECT id FROM users WHERE external_id = :eid"),
-                {"eid": external_id},
+            (
+                await conn.execute(
+                    text("SELECT id FROM users WHERE external_id = :eid"),
+                    {"eid": external_id},
+                )
             )
-        ).mappings().fetchone()
+            .mappings()
+            .fetchone()
+        )
     assert row is not None
     return row["id"]

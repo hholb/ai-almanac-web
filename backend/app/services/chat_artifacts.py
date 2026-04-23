@@ -27,14 +27,20 @@ def _chat_figure_signature(figure_id: str, user_id: str, expires_at: int) -> str
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 
-def signed_chat_figure_url(figure_id: str, user_id: str, expires_at: int | None = None) -> str:
+def signed_chat_figure_url(
+    figure_id: str, user_id: str, expires_at: int | None = None
+) -> str:
     if expires_at is None:
         expires_at = int(datetime.now(timezone.utc).timestamp()) + 3600
     sig = _chat_figure_signature(figure_id, user_id, expires_at)
-    return f"/chat/figures/{figure_id}/public?{urlencode({'exp': expires_at, 'sig': sig})}"
+    return (
+        f"/chat/figures/{figure_id}/public?{urlencode({'exp': expires_at, 'sig': sig})}"
+    )
 
 
-def verify_chat_figure_signature(figure_id: str, user_id: str, expires_at: int, sig: str) -> bool:
+def verify_chat_figure_signature(
+    figure_id: str, user_id: str, expires_at: int, sig: str
+) -> bool:
     now = int(datetime.now(timezone.utc).timestamp())
     if expires_at < now:
         return False
@@ -47,15 +53,22 @@ def hydrate_turn_artifact_urls(turn: ChatTurn, user_id: str) -> ChatTurn:
         signed_url = signed_chat_figure_url(artifact.id, user_id)
         return artifact.model_copy(update={"url": signed_url})
 
-    return turn.model_copy(update={
-        "artifacts": [hydrate_artifact(artifact) for artifact in turn.artifacts],
-        "tool_calls": [
-            tool_call.model_copy(update={
-                "artifacts": [hydrate_artifact(artifact) for artifact in tool_call.artifacts]
-            })
-            for tool_call in turn.tool_calls
-        ],
-    })
+    return turn.model_copy(
+        update={
+            "artifacts": [hydrate_artifact(artifact) for artifact in turn.artifacts],
+            "tool_calls": [
+                tool_call.model_copy(
+                    update={
+                        "artifacts": [
+                            hydrate_artifact(artifact)
+                            for artifact in tool_call.artifacts
+                        ]
+                    }
+                )
+                for tool_call in turn.tool_calls
+            ],
+        }
+    )
 
 
 async def create_chat_figure_artifact(

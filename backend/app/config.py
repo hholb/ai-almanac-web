@@ -4,7 +4,7 @@ import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _MODELS_YAML = Path(__file__).parent / "config" / "models.yaml"
-_ROMP_YAML   = Path(__file__).parent / "config" / "romp.yaml"
+_ROMP_YAML = Path(__file__).parent / "config" / "romp.yaml"
 
 
 class Settings(BaseSettings):
@@ -48,7 +48,9 @@ class Settings(BaseSettings):
 
     job_runner: str = "docker"
     romp_image: str = "romp:latest"
-    romp_wrapper_image: str = ""  # if set, used instead of romp_image for Cloud Run jobs
+    romp_wrapper_image: str = (
+        ""  # if set, used instead of romp_image for Cloud Run jobs
+    )
     job_timeout_seconds: int = 3600
     job_cpu: str = "4"
     job_memory: str = "16Gi"
@@ -127,6 +129,7 @@ settings = Settings()
 # Model registry
 # ---------------------------------------------------------------------------
 
+
 def get_model_registry() -> list[dict]:
     """Load model definitions from models.yaml and resolve model_dir from settings."""
     raw = yaml.safe_load(_MODELS_YAML.read_text())
@@ -184,11 +187,15 @@ def get_demo_datasets() -> list[dict]:
             path = rest.strip()
             obs_file_pattern = None
         if name and path:
-            demo_id = "demo:" + name.lower().replace(" ", "-").replace("(", "").replace(")", "").replace("°", "deg")
-            result.append({
-                "id": demo_id,
-                "name": name,
-                "obs_dir": path,
-                "obs_file_pattern": obs_file_pattern,
-            })
+            demo_id = "demo:" + name.lower().replace(" ", "-").replace("(", "").replace(
+                ")", ""
+            ).replace("°", "deg")
+            result.append(
+                {
+                    "id": demo_id,
+                    "name": name,
+                    "obs_dir": path,
+                    "obs_file_pattern": obs_file_pattern,
+                }
+            )
     return result

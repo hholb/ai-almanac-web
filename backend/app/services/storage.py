@@ -11,7 +11,6 @@ Both implementations share the same interface so routers don't need to care.
 from __future__ import annotations
 
 import datetime
-import os
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -61,7 +60,10 @@ def _chat_figure_storage_keys(storage_key: str) -> list[str]:
     key = Path(storage_key).name
     if Path(key).suffix:
         return [f"chat-figures/{key}"]
-    return [f"chat-figures/{key}{ext}" for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")]
+    return [
+        f"chat-figures/{key}{ext}"
+        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
+    ]
 
 
 class StorageBackend(ABC):
@@ -147,6 +149,7 @@ class StorageBackend(ABC):
 # Local implementation
 # ---------------------------------------------------------------------------
 
+
 class LocalStorage(StorageBackend):
     def __init__(self, upload_dir: str, job_outputs_dir: str):
         self._upload_dir = Path(upload_dir).resolve()
@@ -190,7 +193,11 @@ class LocalStorage(StorageBackend):
 
     def list_nc_output_files(self, job_id: str) -> list:
         output_dir = self._outputs_dir / job_id / "output"
-        return sorted(output_dir.glob("spatial_metrics_*.nc")) if output_dir.exists() else []
+        return (
+            sorted(output_dir.glob("spatial_metrics_*.nc"))
+            if output_dir.exists()
+            else []
+        )
 
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         output_dir = self._outputs_dir / job_id / "output"
@@ -202,6 +209,7 @@ class LocalStorage(StorageBackend):
 
     def open_nc_dataset(self, path):
         import xarray as xr
+
         with _nc_lock:
             return xr.load_dataset(path)
 
@@ -242,11 +250,13 @@ class LocalStorage(StorageBackend):
 # GCS implementation
 # ---------------------------------------------------------------------------
 
+
 class GCSStorage(StorageBackend):
     _SIGNED_URL_EXPIRY = datetime.timedelta(minutes=15)
 
     def __init__(self, uploads_bucket: str, outputs_bucket: str, data_bucket: str):
         from google.cloud import storage as gcs
+
         self._client = gcs.Client()
         self._uploads_bucket = uploads_bucket
         self._outputs_bucket = outputs_bucket
@@ -307,12 +317,14 @@ class GCSStorage(StorageBackend):
 
     def list_nc_output_files(self, job_id: str) -> list:
         import gcsfs
+
         fs = gcsfs.GCSFileSystem()
         prefix = f"{self._outputs_bucket}/{job_id}/output/spatial_metrics_"
         return [f"gs://{f}" for f in sorted(fs.glob(f"{prefix}*.nc"))]
 
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         import gcsfs
+
         fs = gcsfs.GCSFileSystem()
         base = f"{self._outputs_bucket}/{job_id}/output"
         for w in (window, window.replace("-", ",")):
@@ -324,6 +336,7 @@ class GCSStorage(StorageBackend):
     def open_nc_dataset(self, path):
         import xarray as xr
         import gcsfs
+
         fs = gcsfs.GCSFileSystem()
         with fs.open(str(path).removeprefix("gs://"), "rb") as f:
             return xr.load_dataset(f, engine="h5netcdf")
@@ -338,7 +351,9 @@ class GCSStorage(StorageBackend):
 
     def chat_figure_redirect_url(self, figure_id: str) -> str | None:
         for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin"):
-            blob = self._bucket(self._outputs_bucket).blob(f"chat-figures/{figure_id}{ext}")
+            blob = self._bucket(self._outputs_bucket).blob(
+                f"chat-figures/{figure_id}{ext}"
+            )
             if blob.exists():
                 return blob.generate_signed_url(
                     version="v4",
@@ -375,6 +390,7 @@ def get_storage() -> StorageBackend:
 
 def _make_storage() -> StorageBackend:
     from ..config import settings
+
     backend = settings.storage_backend.lower()
     if backend == "gcs":
         return GCSStorage(

@@ -19,6 +19,7 @@ def do_migrations(connection):
 
 async def run_async_migrations() -> None:
     from app.database import _make_engine
+
     connectable = _make_engine()
     async with connectable.connect() as connection:
         await connection.run_sync(do_migrations)
@@ -32,6 +33,7 @@ def run_migrations_online() -> None:
 def run_migrations_offline() -> None:
     from app.config import settings
     from sqlalchemy.engine import make_url
+
     url = make_url(settings.database_url)
     url = url.set(drivername="postgresql+asyncpg")
     context.configure(

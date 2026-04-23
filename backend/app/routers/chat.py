@@ -40,6 +40,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class SessionCreate(BaseModel):
     title: str | None = None
     scope: ChatScope
@@ -72,6 +73,7 @@ class SessionUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -199,7 +201,9 @@ async def _update_session_state(
     )
 
 
-def _apply_scope_to_provider_state(provider_state: list[dict], scope: ChatScope) -> list[dict]:
+def _apply_scope_to_provider_state(
+    provider_state: list[dict], scope: ChatScope
+) -> list[dict]:
     system_message = _build_system_message(scope)
     if provider_state and provider_state[0].get("role") == "system":
         return [system_message, *provider_state[1:]]
@@ -219,7 +223,11 @@ async def _validate_scope(scope: ChatScope, user_id: str) -> ChatScope:
     """).bindparams(bindparam("job_ids", expanding=True))
 
     async with get_db() as conn:
-        rows = (await conn.execute(query, {"uid": user_id, "job_ids": job_ids})).mappings().fetchall()
+        rows = (
+            (await conn.execute(query, {"uid": user_id, "job_ids": job_ids}))
+            .mappings()
+            .fetchall()
+        )
 
     valid_ids = {row["id"] for row in rows}
     invalid_ids = [job_id for job_id in job_ids if job_id not in valid_ids]
@@ -234,9 +242,18 @@ async def _validate_scope(scope: ChatScope, user_id: str) -> ChatScope:
 def _classify_stream_error(exc: Exception, assistant_turn: ChatTurn) -> str:
     message = str(exc).lower()
     name = exc.__class__.__name__.lower()
-    if "tool" in message or "tool" in name or any(tool.status == "failed" for tool in assistant_turn.tool_calls):
+    if (
+        "tool" in message
+        or "tool" in name
+        or any(tool.status == "failed" for tool in assistant_turn.tool_calls)
+    ):
         return "tool_error"
-    if "openai" in message or "api" in name or "rate limit" in message or "timeout" in message:
+    if (
+        "openai" in message
+        or "api" in name
+        or "rate limit" in message
+        or "timeout" in message
+    ):
         return "provider_error"
     return "internal_error"
 
@@ -250,10 +267,12 @@ async def _persist_failed_turn(
     exc: BaseException,
     scope: ChatScope | None = None,
 ) -> None:
-    failed_turn = assistant_turn.model_copy(update={
-        "status": "failed",
-        "error": str(exc) or exc.__class__.__name__,
-    })
+    failed_turn = assistant_turn.model_copy(
+        update={
+            "status": "failed",
+            "error": str(exc) or exc.__class__.__name__,
+        }
+    )
     await _update_session_state(
         conn,
         session_id,
@@ -268,7 +287,10 @@ async def _persist_failed_turn(
 # Routes
 # ---------------------------------------------------------------------------
 
-@router.post("/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED
+)
 async def create_session(body: SessionCreate, user: CurrentUser):
     if not settings.llm_base_url:
         raise HTTPException(status_code=503, detail="LLM is not configured")
@@ -319,39 +341,71 @@ async def list_sessions(
             query += " AND scope->>'key' = :scope_key"
             params["scope_key"] = scope_key
         query += " ORDER BY updated_at DESC"
-        rows = (await conn.execute(
-            text(query),
-            params,
-        )).mappings().fetchall()
+        rows = (
+            (
+                await conn.execute(
+                    text(query),
+                    params,
+                )
+            )
+            .mappings()
+            .fetchall()
+        )
 
     result = []
     for r in rows:
-        transcript = r["transcript"] if isinstance(r["transcript"], list) else json.loads(r["transcript"] or "[]")
-        scope = r["scope"] if isinstance(r["scope"], dict) else json.loads(r["scope"] or "{}")
-        result.append(SessionOut(
-            id=r["id"],
-            title=r["title"],
-            created_at=r["created_at"],
-            updated_at=r["updated_at"],
-            message_count=len(transcript),
-            scope=ChatScope.model_validate(scope),
-        ))
+        transcript = (
+            r["transcript"]
+            if isinstance(r["transcript"], list)
+            else json.loads(r["transcript"] or "[]")
+        )
+        scope = (
+            r["scope"]
+            if isinstance(r["scope"], dict)
+            else json.loads(r["scope"] or "{}")
+        )
+        result.append(
+            SessionOut(
+                id=r["id"],
+                title=r["title"],
+                created_at=r["created_at"],
+                updated_at=r["updated_at"],
+                message_count=len(transcript),
+                scope=ChatScope.model_validate(scope),
+            )
+        )
     return result
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
 async def get_session(session_id: str, user: CurrentUser):
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT * FROM chat_sessions WHERE id = :id AND user_id = :uid"),
-            {"id": session_id, "uid": user["id"]},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT * FROM chat_sessions WHERE id = :id AND user_id = :uid"
+                    ),
+                    {"id": session_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
 
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    transcript = row["transcript"] if isinstance(row["transcript"], list) else json.loads(row["transcript"] or "[]")
-    scope = row["scope"] if isinstance(row["scope"], dict) else json.loads(row["scope"] or "{}")
+    transcript = (
+        row["transcript"]
+        if isinstance(row["transcript"], list)
+        else json.loads(row["transcript"] or "[]")
+    )
+    scope = (
+        row["scope"]
+        if isinstance(row["scope"], dict)
+        else json.loads(row["scope"] or "{}")
+    )
     return SessionDetail(
         id=row["id"],
         title=row["title"],
@@ -359,7 +413,10 @@ async def get_session(session_id: str, user: CurrentUser):
         updated_at=row["updated_at"],
         message_count=len(transcript),
         scope=ChatScope.model_validate(scope),
-        transcript=[hydrate_turn_artifact_urls(ChatTurn.model_validate(turn), user["id"]) for turn in transcript],
+        transcript=[
+            hydrate_turn_artifact_urls(ChatTurn.model_validate(turn), user["id"])
+            for turn in transcript
+        ],
     )
 
 
@@ -370,21 +427,40 @@ async def update_session(session_id: str, body: SessionUpdate, user: CurrentUser
         title = None
 
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("""
+        row = (
+            (
+                await conn.execute(
+                    text("""
                 UPDATE chat_sessions
                 SET title = :title, updated_at = :now
                 WHERE id = :id AND user_id = :uid
                 RETURNING *
             """),
-            {"id": session_id, "uid": user["id"], "title": title, "now": _now()},
-        )).mappings().fetchone()
+                    {
+                        "id": session_id,
+                        "uid": user["id"],
+                        "title": title,
+                        "now": _now(),
+                    },
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
 
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    transcript = row["transcript"] if isinstance(row["transcript"], list) else json.loads(row["transcript"] or "[]")
-    scope = row["scope"] if isinstance(row["scope"], dict) else json.loads(row["scope"] or "{}")
+    transcript = (
+        row["transcript"]
+        if isinstance(row["transcript"], list)
+        else json.loads(row["transcript"] or "[]")
+    )
+    scope = (
+        row["scope"]
+        if isinstance(row["scope"], dict)
+        else json.loads(row["scope"] or "{}")
+    )
     return SessionOut(
         id=row["id"],
         title=row["title"],
@@ -405,10 +481,12 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
         requested_scope = await _validate_scope(body.scope, user["id"])
 
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :uid"),
-            {"id": session_id, "uid": user["id"]},
-        )).fetchone()
+        row = (
+            await conn.execute(
+                text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :uid"),
+                {"id": session_id, "uid": user["id"]},
+            )
+        ).fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -416,25 +494,40 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
     async def _generate():
         # --- Transaction 1: read state with row lock, persist user + streaming assistant turn ---
         async with get_db() as conn:
-            row = (await conn.execute(
-                text("""
+            row = (
+                (
+                    await conn.execute(
+                        text("""
                     SELECT provider_state, transcript, scope
                     FROM chat_sessions
                     WHERE id = :id AND user_id = :uid
                     FOR UPDATE
                 """),
-                {"id": session_id, "uid": user["id"]},
-            )).mappings().fetchone()
+                        {"id": session_id, "uid": user["id"]},
+                    )
+                )
+                .mappings()
+                .fetchone()
+            )
             if not row:
-                yield _stream_event("error", error_type="internal_error", message="Session not found")
+                yield _stream_event(
+                    "error", error_type="internal_error", message="Session not found"
+                )
                 return
 
             provider_state = _json_list(row["provider_state"])
             transcript = _json_list(row["transcript"])
             stored_scope = ChatScope.model_validate(_json_dict(row["scope"]))
             if requested_scope is not None:
-                if requested_scope.kind != stored_scope.kind or requested_scope.key != stored_scope.key:
-                    yield _stream_event("error", error_type="scope_mismatch", message="Session scope does not match the current view")
+                if (
+                    requested_scope.kind != stored_scope.kind
+                    or requested_scope.key != stored_scope.key
+                ):
+                    yield _stream_event(
+                        "error",
+                        error_type="scope_mismatch",
+                        message="Session scope does not match the current view",
+                    )
                     return
                 scope = requested_scope
             else:
@@ -456,7 +549,9 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                 status="streaming",
             )
 
-            pending_provider_state = provider_state + [{"role": "user", "content": body.content}]
+            pending_provider_state = provider_state + [
+                {"role": "user", "content": body.content}
+            ]
             pending_transcript = transcript + [
                 user_turn.model_dump(mode="json"),
                 assistant_turn.model_dump(mode="json"),
@@ -474,17 +569,23 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
         # --- Stream without holding a DB connection ---
         terminal_event: str | None = None
         try:
-            async for event in stream_response(pending_provider_state, user["id"], session_id, scope):
+            async for event in stream_response(
+                pending_provider_state, user["id"], session_id, scope
+            ):
                 data = json.loads(event)
                 if data.get("type") == "done":
-                    completed_turn = ChatTurn.model_validate({
-                        **assistant_turn.model_dump(mode="json"),
-                        **data["turn"],
-                        "id": assistant_turn.id,
-                        "status": "completed",
-                        "error": None,
-                    })
-                    final_provider_state = data.get("provider_state", pending_provider_state)
+                    completed_turn = ChatTurn.model_validate(
+                        {
+                            **assistant_turn.model_dump(mode="json"),
+                            **data["turn"],
+                            "id": assistant_turn.id,
+                            "status": "completed",
+                            "error": None,
+                        }
+                    )
+                    final_provider_state = data.get(
+                        "provider_state", pending_provider_state
+                    )
                     final_transcript = _replace_turn(pending_transcript, completed_turn)
                     # --- Transaction 2: persist completed state ---
                     async with get_db() as conn:
@@ -496,8 +597,12 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
                             updated_at=_now(),
                             scope=scope,
                         )
-                    hydrated_turn = hydrate_turn_artifact_urls(completed_turn, user["id"])
-                    terminal_event = _stream_event("done", turn=hydrated_turn.model_dump(mode="json"))
+                    hydrated_turn = hydrate_turn_artifact_urls(
+                        completed_turn, user["id"]
+                    )
+                    terminal_event = _stream_event(
+                        "done", turn=hydrated_turn.model_dump(mode="json")
+                    )
                     break
 
                 _apply_stream_event(assistant_turn, data)
@@ -557,14 +662,20 @@ async def send_message(session_id: str, body: MessageIn, user: CurrentUser):
 
 async def _serve_chat_figure(figure_id: str, user_id: str):
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("""
+        row = (
+            (
+                await conn.execute(
+                    text("""
                 SELECT storage_key
                 FROM chat_artifacts
                 WHERE id = :id AND user_id = :uid AND kind = 'figure'
             """),
-            {"id": figure_id, "uid": user_id},
-        )).mappings().fetchone()
+                    {"id": figure_id, "uid": user_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Figure not found")
 
@@ -574,7 +685,9 @@ async def _serve_chat_figure(figure_id: str, user_id: str):
     if local_path is not None:
         if not local_path.exists():
             raise HTTPException(status_code=404, detail="Figure not found")
-        return FileResponse(local_path, media_type=guess_chat_figure_media_type(local_path))
+        return FileResponse(
+            local_path, media_type=guess_chat_figure_media_type(local_path)
+        )
     redirect_url = storage.chat_figure_redirect_url(storage_key)
     if redirect_url:
         return RedirectResponse(redirect_url)
@@ -589,10 +702,18 @@ async def get_chat_figure(figure_id: str, user: CurrentUser):
 @router.get("/figures/{figure_id}/public")
 async def get_chat_figure_public(figure_id: str, exp: int, sig: str):
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT user_id FROM chat_artifacts WHERE id = :id AND kind = 'figure'"),
-            {"id": figure_id},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT user_id FROM chat_artifacts WHERE id = :id AND kind = 'figure'"
+                    ),
+                    {"id": figure_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Figure not found")
     user_id = row["user_id"]
@@ -604,22 +725,26 @@ async def get_chat_figure_public(figure_id: str, exp: int, sig: str):
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(session_id: str, user: CurrentUser):
     async with get_db() as conn:
-        rows = (await conn.execute(
-            text("""
+        rows = (
+            (
+                await conn.execute(
+                    text("""
                 SELECT chat_sessions.id, chat_artifacts.storage_key
                 FROM chat_sessions
                 LEFT JOIN chat_artifacts ON chat_artifacts.session_id = chat_sessions.id
                 WHERE chat_sessions.id = :id AND chat_sessions.user_id = :uid
             """),
-            {"id": session_id, "uid": user["id"]},
-        )).mappings().fetchall()
+                    {"id": session_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchall()
+        )
         if not rows:
             raise HTTPException(status_code=404, detail="Session not found")
-        storage_keys = [
-            row["storage_key"]
-            for row in rows
-            if row.get("storage_key")
-        ]
+        storage_keys = [row["storage_key"] for row in rows if row.get("storage_key")]
         for storage_key in storage_keys:
             await delete_chat_figure_artifact(storage_key)
-        await conn.execute(text("DELETE FROM chat_sessions WHERE id = :id"), {"id": session_id})
+        await conn.execute(
+            text("DELETE FROM chat_sessions WHERE id = :id"), {"id": session_id}
+        )

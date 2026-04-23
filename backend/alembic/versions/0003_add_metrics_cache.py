@@ -15,12 +15,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(sa.text(
-        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS metrics_cache JSONB"
-    ))
+    op.execute(sa.text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS metrics_cache JSONB"))
 
 
 def downgrade() -> None:
-    op.execute(sa.text(
-        "ALTER TABLE jobs DROP COLUMN IF EXISTS metrics_cache"
-    ))
+    op.execute(sa.text("ALTER TABLE jobs DROP COLUMN IF EXISTS metrics_cache"))

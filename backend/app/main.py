@@ -37,8 +37,15 @@ async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
-    logger.info("%s %s %d %.1fms", request.method, request.url.path, response.status_code, duration_ms)
+    logger.info(
+        "%s %s %d %.1fms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
     return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -69,6 +76,7 @@ async def health():
 
 storage = get_storage()
 if storage.is_local:
+
     @app.put("/upload/{storage_key:path}", status_code=status.HTTP_200_OK)
     async def local_upload(storage_key: str, request: Request):
         dest = Path(settings.upload_dir) / storage_key

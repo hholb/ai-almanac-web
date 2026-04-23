@@ -1,17 +1,23 @@
 <script lang="ts">
-	import { page } from "$app/stores";
+	import { page } from '$app/stores';
 </script>
 
-<nav class="sticky top-0 z-50 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-glass)] backdrop-blur-[16px]" style="backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);">
-	<div class="max-w-[1160px] mx-auto px-7 h-14 flex items-center justify-between">
-		<a href="/" class="nav-brand flex items-center gap-2.5 no-underline transition-opacity duration-150 hover:opacity-85">
+<nav
+	class="sticky top-0 z-50 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-glass)] backdrop-blur-[16px]"
+	style="backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);"
+>
+	<div class="mx-auto flex h-14 max-w-[1160px] items-center justify-between px-7">
+		<a
+			href="/"
+			class="nav-brand flex items-center gap-2.5 no-underline transition-opacity duration-150 hover:opacity-85"
+		>
 			<span class="text-[0.75rem] text-[var(--color-accent)] opacity-60">&#x25C8;</span>
 			<span class="brand-text">AI Almanac</span>
 		</a>
 		<div class="flex gap-1">
-			<a href="/" class:active={$page.url.pathname === "/"}>Home</a>
-			<a href="/benchmarks" class:active={$page.url.pathname === "/benchmarks"}>Benchmarks</a>
-			<a href="/user" class:active={$page.url.pathname === "/user"}>Account</a>
+			<a href="/" class:active={$page.url.pathname === '/'}>Home</a>
+			<a href="/benchmarks" class:active={$page.url.pathname === '/benchmarks'}>Benchmarks</a>
+			<a href="/user" class:active={$page.url.pathname === '/user'}>Account</a>
 		</div>
 	</div>
 </nav>
@@ -37,7 +43,9 @@
 		text-decoration: none;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
-		transition: color 0.15s, background-color 0.15s;
+		transition:
+			color 0.15s,
+			background-color 0.15s;
 	}
 
 	div a:hover {

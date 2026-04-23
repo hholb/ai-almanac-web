@@ -1,5 +1,5 @@
 <script lang="ts">
-  import MainContent from "./MainContent.svelte";
+	import MainContent from './MainContent.svelte';
 </script>
 
-<MainContent/>
+<MainContent />

@@ -15,7 +15,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(sa.text("""
+    op.execute(
+        sa.text("""
         CREATE TABLE IF NOT EXISTS chat_sessions (
             id          TEXT PRIMARY KEY,
             user_id     TEXT NOT NULL REFERENCES users(id),
@@ -24,7 +25,8 @@ def upgrade() -> None:
             created_at  TIMESTAMPTZ NOT NULL,
             updated_at  TIMESTAMPTZ NOT NULL
         )
-    """))
+    """)
+    )
 
 
 def downgrade() -> None:

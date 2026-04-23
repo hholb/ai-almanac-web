@@ -32,6 +32,7 @@ class ToolExecutionResult:
     parsed: object = None
     artifacts: list = field(default_factory=list)
 
+
 # ---------------------------------------------------------------------------
 # Tool definitions (OpenAI function-calling schema)
 # ---------------------------------------------------------------------------
@@ -98,8 +99,14 @@ TOOLS: list[dict] = [
                 "type": "object",
                 "properties": {
                     "job_id": {"type": "string", "description": "The job UUID"},
-                    "model": {"type": "string", "description": "Model name (e.g. 'aifs')"},
-                    "window": {"type": "string", "description": "Forecast window (e.g. '16-30')"},
+                    "model": {
+                        "type": "string",
+                        "description": "Model name (e.g. 'aifs')",
+                    },
+                    "window": {
+                        "type": "string",
+                        "description": "Forecast window (e.g. '16-30')",
+                    },
                     "metric": {
                         "type": "string",
                         "enum": ["false_alarm_rate", "miss_rate", "mean_mae"],
@@ -275,7 +282,9 @@ def _tool_unavailable_reason(name: str) -> str | None:
         if not settings.enable_run_code:
             return "run_code is disabled by configuration"
         if settings.storage_backend.lower() != "gcs":
-            return "run_code requires GCS storage and is not available in local dev mode"
+            return (
+                "run_code requires GCS storage and is not available in local dev mode"
+            )
         if not settings.gcs_outputs_bucket:
             return "run_code requires a configured GCS outputs bucket"
         if not settings.modal_token_id or not settings.modal_token_secret:
@@ -309,11 +318,15 @@ def _compact_tool_arguments(arguments: str, name: str) -> str:
     try:
         payload = json.loads(arguments)
     except json.JSONDecodeError:
-        return _truncate_for_context(arguments, settings.llm_code_context_max_chars, f"{name} arguments")
+        return _truncate_for_context(
+            arguments, settings.llm_code_context_max_chars, f"{name} arguments"
+        )
 
     code = payload.get("code")
     if isinstance(code, str):
-        compact_code = _truncate_for_context(code, settings.llm_code_context_max_chars, f"{name} code")
+        compact_code = _truncate_for_context(
+            code, settings.llm_code_context_max_chars, f"{name} code"
+        )
         if compact_code != code:
             payload["code"] = compact_code
             payload["code_truncated_for_context"] = True
@@ -363,14 +376,17 @@ def assemble_provider_messages(messages: list[dict]) -> list[dict]:
 # Tool executors
 # ---------------------------------------------------------------------------
 
+
 def _scope_conditions(scope: ChatScope, jobs_table: sa.Table) -> list:
     """Return a list of SQLAlchemy WHERE-clause expressions for the given scope."""
     if scope.kind == "benchmark_run_group":
         if scope.job_ids:
-            return [sa.or_(
-                jobs_table.c.run_id == sa.bindparam("scope_key"),
-                jobs_table.c.id.in_(sa.bindparam("job_ids", expanding=True)),
-            )]
+            return [
+                sa.or_(
+                    jobs_table.c.run_id == sa.bindparam("scope_key"),
+                    jobs_table.c.id.in_(sa.bindparam("job_ids", expanding=True)),
+                )
+            ]
         return [jobs_table.c.run_id == sa.bindparam("scope_key")]
     if scope.job_ids:
         return [jobs_table.c.id.in_(sa.bindparam("job_ids", expanding=True))]
@@ -404,7 +420,13 @@ async def _exec_list_jobs(args: dict, user_id: str, scope: ChatScope) -> str:
     from ..database import get_db
 
     query = (
-        sa.select(_jobs.c.id, _jobs.c.config_json, _jobs.c.status, _jobs.c.completed_at, _jobs.c.created_at)
+        sa.select(
+            _jobs.c.id,
+            _jobs.c.config_json,
+            _jobs.c.status,
+            _jobs.c.completed_at,
+            _jobs.c.created_at,
+        )
         .where(_jobs.c.user_id == sa.bindparam("uid"))
         .where(_jobs.c.status == "complete")
     )
@@ -413,18 +435,24 @@ async def _exec_list_jobs(args: dict, user_id: str, scope: ChatScope) -> str:
     query = query.order_by(_jobs.c.completed_at.desc())
 
     async with get_db() as conn:
-        rows = (await conn.execute(query, {"uid": user_id, **_scope_params(scope)})).mappings().fetchall()
+        rows = (
+            (await conn.execute(query, {"uid": user_id, **_scope_params(scope)}))
+            .mappings()
+            .fetchall()
+        )
         rows = [dict(r) for r in rows]
     jobs = []
     for r in rows:
         cfg = json.loads(r.get("config_json") or "{}")
-        jobs.append({
-            "job_id": r["id"],
-            "model_name": cfg.get("model_name"),
-            "region": cfg.get("romp_params", {}).get("region"),
-            "dataset_id": cfg.get("dataset_id") or r.get("dataset_id"),
-            "completed_at": r["completed_at"],
-        })
+        jobs.append(
+            {
+                "job_id": r["id"],
+                "model_name": cfg.get("model_name"),
+                "region": cfg.get("romp_params", {}).get("region"),
+                "dataset_id": cfg.get("dataset_id") or r.get("dataset_id"),
+                "completed_at": r["completed_at"],
+            }
+        )
     return json.dumps(jobs)
 
 
@@ -441,19 +469,29 @@ async def _exec_get_job_info(args: dict, user_id: str, scope: ChatScope) -> str:
         query = query.where(cond)
 
     async with get_db() as conn:
-        row = (await conn.execute(query, {"id": job_id, "uid": user_id, **_scope_params(scope)})).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    query, {"id": job_id, "uid": user_id, **_scope_params(scope)}
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
         row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
     cfg = json.loads(row.get("config_json") or "{}")
-    return json.dumps({
-        "job_id": job_id,
-        "status": row["status"],
-        "model_name": cfg.get("model_name"),
-        "model_dir": cfg.get("model_dir"),
-        "obs_dir": cfg.get("obs_dir"),
-        "romp_params": cfg.get("romp_params", {}),
-    })
+    return json.dumps(
+        {
+            "job_id": job_id,
+            "status": row["status"],
+            "model_name": cfg.get("model_name"),
+            "model_dir": cfg.get("model_dir"),
+            "obs_dir": cfg.get("obs_dir"),
+            "romp_params": cfg.get("romp_params", {}),
+        }
+    )
 
 
 def _job_status_query(scope: ChatScope):
@@ -476,10 +514,16 @@ async def _exec_get_job_metrics(args: dict, user_id: str, scope: ChatScope) -> s
     job_id = args["job_id"]
 
     async with get_db() as conn:
-        row = (await conn.execute(
-            _job_status_query(scope),
-            {"id": job_id, "uid": user_id, **_scope_params(scope)},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    _job_status_query(scope),
+                    {"id": job_id, "uid": user_id, **_scope_params(scope)},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
         row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
@@ -488,14 +532,20 @@ async def _exec_get_job_metrics(args: dict, user_id: str, scope: ChatScope) -> s
 
     def _load():
         import xarray as xr
+
         storage = get_storage()
         UNIT_MAP = {"false_alarm_rate": "fraction", "miss_rate": "fraction"}
 
         if storage.is_local:
             output_dir = storage._outputs_dir / job_id / "output"
-            nc_files = sorted(output_dir.glob("spatial_metrics_*.nc")) if output_dir.exists() else []
+            nc_files = (
+                sorted(output_dir.glob("spatial_metrics_*.nc"))
+                if output_dir.exists()
+                else []
+            )
         else:
             import gcsfs
+
             fs = gcsfs.GCSFileSystem()
             prefix = f"{storage._outputs_bucket}/{job_id}/output/spatial_metrics_"
             nc_files = [f"gs://{f}" for f in sorted(fs.glob(f"{prefix}*.nc"))]
@@ -546,10 +596,16 @@ async def _exec_get_spatial_summary(args: dict, user_id: str, scope: ChatScope) 
     metric = args["metric"]
 
     async with get_db() as conn:
-        row = (await conn.execute(
-            _job_status_query(scope),
-            {"id": job_id, "uid": user_id, **_scope_params(scope)},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    _job_status_query(scope),
+                    {"id": job_id, "uid": user_id, **_scope_params(scope)},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
         row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
@@ -558,6 +614,7 @@ async def _exec_get_spatial_summary(args: dict, user_id: str, scope: ChatScope) 
 
     def _load():
         import xarray as xr
+
         storage = get_storage()
         w_alt = window.replace("-", ",")
 
@@ -568,6 +625,7 @@ async def _exec_get_spatial_summary(args: dict, user_id: str, scope: ChatScope) 
                 matches = list(output_dir.glob(f"spatial_metrics_{model}_{w_alt}.nc"))
         else:
             import gcsfs
+
             fs = gcsfs.GCSFileSystem()
             base = f"{storage._outputs_bucket}/{job_id}/output"
             matches = fs.glob(f"{base}/spatial_metrics_{model}_{window}.nc")
@@ -598,7 +656,10 @@ async def _exec_get_spatial_summary(args: dict, user_id: str, scope: ChatScope) 
             return {"error": "No valid data points"}
 
         return {
-            "job_id": job_id, "model": model, "window": window, "metric": metric,
+            "job_id": job_id,
+            "model": model,
+            "window": window,
+            "metric": metric,
             "grid_shape": {"lats": len(lats), "lons": len(lons)},
             "lat_range": [round(min(lats), 2), round(max(lats), 2)],
             "lon_range": [round(min(lons), 2), round(max(lons), 2)],
@@ -627,6 +688,7 @@ async def _exec_run_code_sandbox(args: dict, user_id: str, scope: ChatScope) -> 
 
     def _run():
         import modal
+
         fn = modal.Function.from_name("almanac-romp", "run_code_sandbox")
         return fn.remote(code)
 
@@ -650,10 +712,16 @@ async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
     code = args["code"]
 
     async with get_db() as conn:
-        row = (await conn.execute(
-            _job_status_query(scope),
-            {"id": job_id, "uid": user_id, **_scope_params(scope)},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    _job_status_query(scope),
+                    {"id": job_id, "uid": user_id, **_scope_params(scope)},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
         row = dict(row) if row else None
     if not row:
         return json.dumps({"error": f"Job {job_id} not found"})
@@ -664,6 +732,7 @@ async def _exec_run_code(args: dict, user_id: str, scope: ChatScope) -> str:
 
     def _run():
         import modal
+
         fn = modal.Function.from_name("almanac-romp", "run_code")
         return fn.remote(job_id, storage._outputs_bucket, code)
 
@@ -686,7 +755,9 @@ _EXECUTORS: dict[str, callable] = {
 }
 
 
-async def _prepare_tool_result(raw_result: object, session_id: str, user_id: str) -> ToolExecutionResult:
+async def _prepare_tool_result(
+    raw_result: object, session_id: str, user_id: str
+) -> ToolExecutionResult:
     if isinstance(raw_result, str):
         try:
             parsed = json.loads(raw_result)
@@ -705,7 +776,9 @@ async def _prepare_tool_result(raw_result: object, session_id: str, user_id: str
         if not isinstance(artifact_meta, dict):
             continue
         data = artifact_meta.get("data")
-        if artifact_meta.get("kind") == "figure" and isinstance(data, (bytes, bytearray)):
+        if artifact_meta.get("kind") == "figure" and isinstance(
+            data, (bytes, bytearray)
+        ):
             artifact = await create_chat_figure_artifact(
                 session_id,
                 user_id,
@@ -715,46 +788,55 @@ async def _prepare_tool_result(raw_result: object, session_id: str, user_id: str
                 media_type=artifact_meta.get("media_type"),
             )
             saved_artifacts.append(artifact)
-            sanitized_artifacts.append({
-                "id": artifact.id,
-                "kind": artifact.kind,
-                "url": artifact.url,
-                "label": artifact.label,
-                "media_type": artifact.media_type,
-                "filename": artifact.filename,
-                "created_at": artifact.created_at.isoformat(),
-            })
+            sanitized_artifacts.append(
+                {
+                    "id": artifact.id,
+                    "kind": artifact.kind,
+                    "url": artifact.url,
+                    "label": artifact.label,
+                    "media_type": artifact.media_type,
+                    "filename": artifact.filename,
+                    "created_at": artifact.created_at.isoformat(),
+                }
+            )
 
-    payload = {
-        key: value
-        for key, value in parsed.items()
-        if key != "artifacts"
-    }
+    payload = {key: value for key, value in parsed.items() if key != "artifacts"}
     if sanitized_artifacts:
         payload["artifacts"] = sanitized_artifacts
     content = json.dumps(payload)
-    return ToolExecutionResult(content=content, parsed=payload, artifacts=saved_artifacts)
+    return ToolExecutionResult(
+        content=content, parsed=payload, artifacts=saved_artifacts
+    )
 
 
-async def execute_tool(name: str, args: dict, user_id: str, scope: ChatScope, session_id: str) -> ToolExecutionResult:
+async def execute_tool(
+    name: str, args: dict, user_id: str, scope: ChatScope, session_id: str
+) -> ToolExecutionResult:
     executor = _EXECUTORS.get(name)
     if not executor:
-        return ToolExecutionResult(content=json.dumps({"error": f"Unknown tool: {name}"}), parsed={"error": f"Unknown tool: {name}"})
+        return ToolExecutionResult(
+            content=json.dumps({"error": f"Unknown tool: {name}"}),
+            parsed={"error": f"Unknown tool: {name}"},
+        )
     try:
         raw_result = await executor(args, user_id, scope)
         return await _prepare_tool_result(raw_result, session_id, user_id)
     except Exception as exc:
         logger.exception("Tool %s failed", name)
-        return ToolExecutionResult(content=json.dumps({"error": str(exc)}), parsed={"error": str(exc)})
+        return ToolExecutionResult(
+            content=json.dumps({"error": str(exc)}), parsed={"error": str(exc)}
+        )
 
 
 # ---------------------------------------------------------------------------
 # Streaming chat completion with tool use
 # ---------------------------------------------------------------------------
 
+
 def get_client():
     from openai import AsyncOpenAI
     from ..config import settings
+
     if not settings.llm_base_url:
         raise RuntimeError("LLM_BASE_URL is not configured")
     return AsyncOpenAI(
@@ -784,7 +866,9 @@ async def stream_response(
     working_messages = list(messages)
     consumed_prefix_len = len(working_messages)
     active_tools = get_available_tools()
-    turn = ChatTurn(id=new_turn_id(), role="assistant", content="", created_at=utc_now())
+    turn = ChatTurn(
+        id=new_turn_id(), role="assistant", content="", created_at=utc_now()
+    )
 
     while True:
         # Accumulate the full response so we can handle tool calls.
@@ -816,7 +900,9 @@ async def stream_response(
             if delta.content:
                 response_message["content"] += delta.content
                 turn.content += delta.content
-                yield json.dumps({"type": "text_delta", "turn_id": turn.id, "content": delta.content})
+                yield json.dumps(
+                    {"type": "text_delta", "turn_id": turn.id, "content": delta.content}
+                )
 
             # Tool call deltas — accumulate across chunks
             if delta.tool_calls:
@@ -824,10 +910,13 @@ async def stream_response(
                     if tc_delta.index is not None:
                         # New tool call starting
                         while len(tool_calls) <= tc_delta.index:
-                            tool_calls.append({
-                                "id": "", "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            })
+                            tool_calls.append(
+                                {
+                                    "id": "",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            )
                         current_tool = tool_calls[tc_delta.index]
 
                     if tc_delta.id:
@@ -836,18 +925,22 @@ async def stream_response(
                         if tc_delta.function.name:
                             current_tool["function"]["name"] += tc_delta.function.name
                         if tc_delta.function.arguments:
-                            current_tool["function"]["arguments"] += tc_delta.function.arguments
+                            current_tool["function"]["arguments"] += (
+                                tc_delta.function.arguments
+                            )
 
         # If no tool calls, we're done — append the final assistant message and emit
         if not tool_calls:
             turn.content = _SANDBOX_IMAGE_RE.sub("", turn.content).strip()
             final_provider_state = assemble_provider_messages(working_messages)
             final_provider_state.append(_compact_provider_message(response_message))
-            yield json.dumps({
-                "type": "done",
-                "provider_state": final_provider_state,
-                "turn": turn.model_dump(mode="json"),
-            })
+            yield json.dumps(
+                {
+                    "type": "done",
+                    "provider_state": final_provider_state,
+                    "turn": turn.model_dump(mode="json"),
+                }
+            )
             return
 
         consumed_prefix_len = len(working_messages)
@@ -864,38 +957,52 @@ async def stream_response(
             except json.JSONDecodeError:
                 args = {}
 
-            turn_tool = ChatToolCall(id=tc["id"], name=name, status="running", input=args)
+            turn_tool = ChatToolCall(
+                id=tc["id"], name=name, status="running", input=args
+            )
             turn.tool_calls.append(turn_tool)
-            yield json.dumps({
-                "type": "tool_call",
-                "turn_id": turn.id,
-                "tool_call": turn_tool.model_dump(mode="json"),
-            })
+            yield json.dumps(
+                {
+                    "type": "tool_call",
+                    "turn_id": turn.id,
+                    "tool_call": turn_tool.model_dump(mode="json"),
+                }
+            )
             result = await execute_tool(name, args, user_id, session_scope, session_id)
 
             for artifact in result.artifacts:
                 turn_tool.artifacts.append(artifact)
                 turn.artifacts.append(artifact)
-                yield json.dumps({
-                    "type": "artifact",
-                    "turn_id": turn.id,
-                    "tool_call_id": turn_tool.id,
-                    "artifact": artifact.model_dump(mode="json"),
-                })
+                yield json.dumps(
+                    {
+                        "type": "artifact",
+                        "turn_id": turn.id,
+                        "tool_call_id": turn_tool.id,
+                        "artifact": artifact.model_dump(mode="json"),
+                    }
+                )
 
             parsed_result = result.parsed
-            turn_tool.status = "failed" if isinstance(parsed_result, dict) and parsed_result.get("error") else "completed"
+            turn_tool.status = (
+                "failed"
+                if isinstance(parsed_result, dict) and parsed_result.get("error")
+                else "completed"
+            )
             turn_tool.result = parsed_result
-            yield json.dumps({
-                "type": "tool_result",
-                "turn_id": turn.id,
-                "tool_call_id": turn_tool.id,
-                "status": turn_tool.status,
-                "result": parsed_result,
-            })
+            yield json.dumps(
+                {
+                    "type": "tool_result",
+                    "turn_id": turn.id,
+                    "tool_call_id": turn_tool.id,
+                    "status": turn_tool.status,
+                    "result": parsed_result,
+                }
+            )
 
-            working_messages.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": result.content,
-            })
+            working_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result.content,
+                }
+            )

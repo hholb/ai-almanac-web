@@ -29,7 +29,9 @@ def _sse_events(body: str) -> list[dict]:
     return events
 
 
-async def _create_session(client: httpx.AsyncClient, auth_headers: dict[str, str], *, title: str = "Session") -> dict:
+async def _create_session(
+    client: httpx.AsyncClient, auth_headers: dict[str, str], *, title: str = "Session"
+) -> dict:
     response = await client.post(
         "/chat/sessions",
         headers=auth_headers,
@@ -59,7 +61,9 @@ async def _insert_job(engine: AsyncEngine, user_id: str, job_id: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_session_lifecycle(client: httpx.AsyncClient, auth_headers: dict[str, str]) -> None:
+async def test_chat_session_lifecycle(
+    client: httpx.AsyncClient, auth_headers: dict[str, str]
+) -> None:
     created = await _create_session(client, auth_headers, title="Original title")
     session_id = created["id"]
 
@@ -71,7 +75,9 @@ async def test_chat_session_lifecycle(client: httpx.AsyncClient, auth_headers: d
     assert list_response.status_code == 200
     assert [session["id"] for session in list_response.json()] == [session_id]
 
-    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail_response = await client.get(
+        f"/chat/sessions/{session_id}", headers=auth_headers
+    )
     assert detail_response.status_code == 200
     assert detail_response.json()["transcript"] == []
 
@@ -83,10 +89,14 @@ async def test_chat_session_lifecycle(client: httpx.AsyncClient, auth_headers: d
     assert rename_response.status_code == 200
     assert rename_response.json()["title"] == "Renamed"
 
-    delete_response = await client.delete(f"/chat/sessions/{session_id}", headers=auth_headers)
+    delete_response = await client.delete(
+        f"/chat/sessions/{session_id}", headers=auth_headers
+    )
     assert delete_response.status_code == 204
 
-    missing_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    missing_response = await client.get(
+        f"/chat/sessions/{session_id}", headers=auth_headers
+    )
     assert missing_response.status_code == 404
 
 
@@ -116,7 +126,8 @@ async def test_send_message_persists_user_and_assistant_turns(
                     "tool_calls": [],
                     "artifacts": [],
                 },
-                "provider_state": provider_state + [{"role": "assistant", "content": "It finished successfully."}],
+                "provider_state": provider_state
+                + [{"role": "assistant", "content": "It finished successfully."}],
             }
         )
 
@@ -134,7 +145,9 @@ async def test_send_message_persists_user_and_assistant_turns(
     assert events[-1]["type"] == "done"
     assert events[-1]["turn"]["content"] == "It finished successfully."
 
-    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail_response = await client.get(
+        f"/chat/sessions/{session_id}", headers=auth_headers
+    )
     transcript = detail_response.json()["transcript"]
     assert [turn["role"] for turn in transcript] == ["user", "assistant"]
     assert transcript[0]["content"] == "How did this run do?"
@@ -175,7 +188,9 @@ async def test_send_message_persists_failed_assistant_turn_on_stream_error(
     assert events[-1]["type"] == "error"
     assert events[-1]["message"] == "Chat response failed"
 
-    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail_response = await client.get(
+        f"/chat/sessions/{session_id}", headers=auth_headers
+    )
     transcript = detail_response.json()["transcript"]
     assert [turn["role"] for turn in transcript] == ["user", "assistant"]
     assert transcript[0]["content"] == "Summarize this failure"
@@ -213,7 +228,8 @@ async def test_send_message_refreshes_scope_job_ids(
                     "tool_calls": [],
                     "artifacts": [],
                 },
-                "provider_state": provider_state + [{"role": "assistant", "content": "Scoped response"}],
+                "provider_state": provider_state
+                + [{"role": "assistant", "content": "Scoped response"}],
             }
         )
 
@@ -230,6 +246,8 @@ async def test_send_message_refreshes_scope_job_ids(
     assert response.status_code == 200
     assert _sse_events(response.text)[-1]["type"] == "done"
 
-    detail_response = await client.get(f"/chat/sessions/{session_id}", headers=auth_headers)
+    detail_response = await client.get(
+        f"/chat/sessions/{session_id}", headers=auth_headers
+    )
     assert detail_response.status_code == 200
     assert detail_response.json()["scope"]["job_ids"] == [job_id]

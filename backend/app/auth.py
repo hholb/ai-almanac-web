@@ -52,10 +52,14 @@ async def current_user(
     identity = await asyncio.to_thread(_introspect_sync, credentials.credentials)
 
     if not identity.get("active") or not identity.get("sub"):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
+        )
 
     async with get_db() as conn:
-        return await get_or_create_user(conn, external_id=identity["sub"], email=identity.get("email"))
+        return await get_or_create_user(
+            conn, external_id=identity["sub"], email=identity.get("email")
+        )
 
 
 CurrentUser = Annotated[dict, Depends(current_user)]

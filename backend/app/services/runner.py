@@ -28,13 +28,14 @@ def _to_host_path(path: str) -> str:
     No-op when the setting is empty (backend running directly on the host).
     """
     from ..config import settings
+
     for entry in settings.docker_path_map.split(","):
         entry = entry.strip()
         if "=" not in entry:
             continue
         container_prefix, host_prefix = entry.split("=", 1)
         if path.startswith(container_prefix):
-            return host_prefix + path[len(container_prefix):]
+            return host_prefix + path[len(container_prefix) :]
     return path
 
 
@@ -47,6 +48,7 @@ class JobRunner(ABC):
 # ---------------------------------------------------------------------------
 # Docker runner (local dev)
 # ---------------------------------------------------------------------------
+
 
 class DockerRunner(JobRunner):
     def __init__(self, romp_image: str, job_timeout_seconds: int, storage):
@@ -61,8 +63,10 @@ class DockerRunner(JobRunner):
 
     def _run(self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop) -> None:
         from .storage import LocalStorage
-        assert isinstance(self._storage, LocalStorage), \
+
+        assert isinstance(self._storage, LocalStorage), (
             "DockerRunner requires LocalStorage"
+        )
 
         output_dir, figure_dir = self._storage.job_output_uri(job_id)
         log_path = self._storage.log_path(job_id)
@@ -89,21 +93,32 @@ class DockerRunner(JobRunner):
             romp_params["thresh_file"] = f"/data/thresh/{p.name}"
 
         env = {
-            "ROMP_OBS_DIR":    "/data/obs",
-            "ROMP_MODEL_DIR":  "/data/model",
+            "ROMP_OBS_DIR": "/data/obs",
+            "ROMP_MODEL_DIR": "/data/model",
             "ROMP_MODEL_NAME": config["model_name"],
-            "ROMP_DIR_OUT":    "/data/output",
-            "ROMP_DIR_FIG":    "/data/figure",
-            **{f"ROMP_{k.upper()}": str(v) for k, v in romp_params.items() if v is not None},
+            "ROMP_DIR_OUT": "/data/output",
+            "ROMP_DIR_FIG": "/data/figure",
+            **{
+                f"ROMP_{k.upper()}": str(v)
+                for k, v in romp_params.items()
+                if v is not None
+            },
         }
 
         cmd = [
-            "docker", "run", "--rm",
-            "--name", f"romp-{job_id}",
-            "-v", f"{_to_host_path(config['obs_dir'])}:/data/obs:ro",
-            "-v", f"{_to_host_path(config['model_dir'])}:/data/model:ro",
-            "-v", f"{_to_host_path(output_dir)}:/data/output",
-            "-v", f"{_to_host_path(figure_dir)}:/data/figure",
+            "docker",
+            "run",
+            "--rm",
+            "--name",
+            f"romp-{job_id}",
+            "-v",
+            f"{_to_host_path(config['obs_dir'])}:/data/obs:ro",
+            "-v",
+            f"{_to_host_path(config['model_dir'])}:/data/model:ro",
+            "-v",
+            f"{_to_host_path(output_dir)}:/data/output",
+            "-v",
+            f"{_to_host_path(figure_dir)}:/data/figure",
             *extra_mounts,
         ]
         for k, v in env.items():
@@ -127,11 +142,23 @@ class DockerRunner(JobRunner):
                 # SIGSEGV in a C extension after outputs are written — treat as success.
                 if any(Path(output_dir).iterdir()):
                     _update_status(job_id, "complete", loop=loop)
-                    logger.warning("Job %s segfaulted but has output — marking complete", job_id)
+                    logger.warning(
+                        "Job %s segfaulted but has output — marking complete", job_id
+                    )
                 else:
-                    _update_status(job_id, "failed", error="Container segfaulted with no output", loop=loop)
+                    _update_status(
+                        job_id,
+                        "failed",
+                        error="Container segfaulted with no output",
+                        loop=loop,
+                    )
             else:
-                _update_status(job_id, "failed", error=f"Container exited with code {result.returncode}", loop=loop)
+                _update_status(
+                    job_id,
+                    "failed",
+                    error=f"Container exited with code {result.returncode}",
+                    loop=loop,
+                )
 
         except subprocess.TimeoutExpired:
             subprocess.run(["docker", "stop", f"romp-{job_id}"], check=False)
@@ -145,6 +172,7 @@ class DockerRunner(JobRunner):
 # ---------------------------------------------------------------------------
 # Cloud Run Jobs runner (production)
 # ---------------------------------------------------------------------------
+
 
 class CloudRunJobRunner(JobRunner):
     def __init__(
@@ -173,17 +201,21 @@ class CloudRunJobRunner(JobRunner):
 
     def run_job(self, job_id: str, config: dict) -> None:
         loop = asyncio.get_event_loop()
-        t = threading.Thread(target=self._submit, args=(job_id, config, loop), daemon=True)
+        t = threading.Thread(
+            target=self._submit, args=(job_id, config, loop), daemon=True
+        )
         t.start()
 
-    def _submit(self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop) -> None:
+    def _submit(
+        self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop
+    ) -> None:
         from google.cloud import run_v2
         from google.protobuf import duration_pb2
 
         romp_params = config.get("romp_params", {})
         probabilistic = str(romp_params.get("probabilistic", "false")).lower() == "true"
-        cpu     = self._job_cpu_prob     if probabilistic else self._job_cpu
-        memory  = self._job_memory_prob  if probabilistic else self._job_memory
+        cpu = self._job_cpu_prob if probabilistic else self._job_cpu
+        memory = self._job_memory_prob if probabilistic else self._job_memory
 
         # Build GCS volumes and derive container-local paths from gs:// URIs.
         # One volume per unique bucket, mounted at /mnt/{bucket-name}.
@@ -193,43 +225,59 @@ class CloudRunJobRunner(JobRunner):
         def _local_path(uri: str, read_only: bool) -> str:
             bucket, _, prefix = uri.removeprefix("gs://").partition("/")
             if not any(v.name == bucket for v in volumes):
-                volumes.append(run_v2.Volume(
-                    name=bucket,
-                    gcs=run_v2.GCSVolumeSource(bucket=bucket, read_only=read_only),
-                ))
-                volume_mounts.append(run_v2.VolumeMount(
-                    name=bucket, mount_path=f"/mnt/{bucket}",
-                ))
+                volumes.append(
+                    run_v2.Volume(
+                        name=bucket,
+                        gcs=run_v2.GCSVolumeSource(bucket=bucket, read_only=read_only),
+                    )
+                )
+                volume_mounts.append(
+                    run_v2.VolumeMount(
+                        name=bucket,
+                        mount_path=f"/mnt/{bucket}",
+                    )
+                )
             return f"/mnt/{bucket}/{prefix}".rstrip("/")
 
-        obs_local   = _local_path(config["obs_dir"],   read_only=True)
+        obs_local = _local_path(config["obs_dir"], read_only=True)
         model_local = _local_path(config["model_dir"], read_only=True)
-        _local_path(f"gs://{self._outputs_bucket}/",   read_only=False)
+        _local_path(f"gs://{self._outputs_bucket}/", read_only=False)
 
         env_vars = [
-            run_v2.EnvVar(name="ROMP_OBS_DIR",    value=obs_local),
-            run_v2.EnvVar(name="ROMP_MODEL_DIR",  value=model_local),
+            run_v2.EnvVar(name="ROMP_OBS_DIR", value=obs_local),
+            run_v2.EnvVar(name="ROMP_MODEL_DIR", value=model_local),
             run_v2.EnvVar(name="ROMP_MODEL_NAME", value=config["model_name"]),
-            run_v2.EnvVar(name="ROMP_DIR_OUT",    value=f"/mnt/{self._outputs_bucket}/{job_id}/output"),
-            run_v2.EnvVar(name="ROMP_DIR_FIG",    value=f"/mnt/{self._outputs_bucket}/{job_id}/figure"),
-            *[run_v2.EnvVar(name=f"ROMP_{k.upper()}", value=str(v))
-              for k, v in romp_params.items() if v is not None],
+            run_v2.EnvVar(
+                name="ROMP_DIR_OUT",
+                value=f"/mnt/{self._outputs_bucket}/{job_id}/output",
+            ),
+            run_v2.EnvVar(
+                name="ROMP_DIR_FIG",
+                value=f"/mnt/{self._outputs_bucket}/{job_id}/figure",
+            ),
+            *[
+                run_v2.EnvVar(name=f"ROMP_{k.upper()}", value=str(v))
+                for k, v in romp_params.items()
+                if v is not None
+            ],
         ]
 
         job_name = f"romp-{job_id.replace('_', '-')}"[:49]
-        parent   = f"projects/{self._project}/locations/{self._region}"
+        parent = f"projects/{self._project}/locations/{self._region}"
 
         cloud_run_job = run_v2.Job(
             template=run_v2.ExecutionTemplate(
                 template=run_v2.TaskTemplate(
-                    containers=[run_v2.Container(
-                        image=self._image,
-                        env=env_vars,
-                        volume_mounts=volume_mounts,
-                        resources=run_v2.ResourceRequirements(
-                            limits={"cpu": cpu, "memory": memory},
-                        ),
-                    )],
+                    containers=[
+                        run_v2.Container(
+                            image=self._image,
+                            env=env_vars,
+                            volume_mounts=volume_mounts,
+                            resources=run_v2.ResourceRequirements(
+                                limits={"cpu": cpu, "memory": memory},
+                            ),
+                        )
+                    ],
                     volumes=volumes,
                     service_account=self._worker_sa,
                     max_retries=0,
@@ -243,7 +291,9 @@ class CloudRunJobRunner(JobRunner):
 
         try:
             jobs_client.create_job(
-                parent=parent, job=cloud_run_job, job_id=job_name,
+                parent=parent,
+                job=cloud_run_job,
+                job_id=job_name,
             ).result(timeout=None)
             logger.info("Created Cloud Run Job %s for job_id %s", job_name, job_id)
 
@@ -266,15 +316,22 @@ class CloudRunJobRunner(JobRunner):
 
     def _fetch_execution_error(self, execution_name: str) -> str:
         from .logging import fetch_cloud_logs
+
         execution_id = execution_name.split("/")[-1]
         filter_expr = (
             f'resource.type="cloud_run_job" '
             f'AND labels."run.googleapis.com/execution_name"=~"{execution_id}"'
         )
         result = fetch_cloud_logs(filter_expr, max_entries=20, descending=True)
-        return result if result != "(no logs found)" else "Cloud Run Job task failed — check Cloud Logging"
+        return (
+            result
+            if result != "(no logs found)"
+            else "Cloud Run Job task failed — check Cloud Logging"
+        )
 
-    def _poll(self, job_id: str, execution_name: str, loop: asyncio.AbstractEventLoop) -> None:
+    def _poll(
+        self, job_id: str, execution_name: str, loop: asyncio.AbstractEventLoop
+    ) -> None:
         import time
         from google.cloud import run_v2
 
@@ -288,7 +345,7 @@ class CloudRunJobRunner(JobRunner):
                     logger.info("Execution %s succeeded", execution_name)
                     return
                 if ex.failed_count > 0:
-                    error_msg = _fetch_execution_error(execution_name)
+                    error_msg = self._fetch_execution_error(execution_name)
                     _update_status(job_id, "failed", error=error_msg, loop=loop)
                     logger.error("Execution %s failed", execution_name)
                     return
@@ -300,6 +357,7 @@ class CloudRunJobRunner(JobRunner):
 # Modal runner (production alternative to Cloud Run Jobs)
 # ---------------------------------------------------------------------------
 
+
 class ModalRunner(JobRunner):
     def __init__(self, outputs_bucket: str, job_timeout_seconds: int):
         self._outputs_bucket = outputs_bucket
@@ -307,10 +365,14 @@ class ModalRunner(JobRunner):
 
     def run_job(self, job_id: str, config: dict) -> None:
         loop = asyncio.get_event_loop()
-        t = threading.Thread(target=self._submit_and_poll, args=(job_id, config, loop), daemon=True)
+        t = threading.Thread(
+            target=self._submit_and_poll, args=(job_id, config, loop), daemon=True
+        )
         t.start()
 
-    def _submit_and_poll(self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop) -> None:
+    def _submit_and_poll(
+        self, job_id: str, config: dict, loop: asyncio.AbstractEventLoop
+    ) -> None:
         import time
         import modal
 
@@ -319,7 +381,12 @@ class ModalRunner(JobRunner):
             handle = run_romp.spawn(job_id, config, self._outputs_bucket)
             logger.info("Spawned Modal function for job %s", job_id)
         except Exception as exc:
-            _update_status(job_id, "failed", error=f"Failed to spawn Modal function: {exc}", loop=loop)
+            _update_status(
+                job_id,
+                "failed",
+                error=f"Failed to spawn Modal function: {exc}",
+                loop=loop,
+            )
             logger.exception("Failed to spawn Modal job %s", job_id)
             return
 
@@ -347,6 +414,7 @@ class ModalRunner(JobRunner):
 # Shared status helper
 # ---------------------------------------------------------------------------
 
+
 def _update_status(
     job_id: str,
     status: str,
@@ -363,12 +431,16 @@ def _update_status(
         async with get_db() as conn:
             if status == "complete":
                 await conn.execute(
-                    text("UPDATE jobs SET status = :status, completed_at = :now WHERE id = :id"),
+                    text(
+                        "UPDATE jobs SET status = :status, completed_at = :now WHERE id = :id"
+                    ),
                     {"status": status, "now": now, "id": job_id},
                 )
             else:
                 await conn.execute(
-                    text("UPDATE jobs SET status = :status, completed_at = :now, error = :error WHERE id = :id"),
+                    text(
+                        "UPDATE jobs SET status = :status, completed_at = :now, error = :error WHERE id = :id"
+                    ),
                     {"status": status, "now": now, "error": error, "id": job_id},
                 )
 
