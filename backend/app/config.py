@@ -4,9 +4,9 @@ from pathlib import Path
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_MODELS_YAML   = Path(__file__).parent / "config" / "models.yaml"
+_MODELS_YAML = Path(__file__).parent / "config" / "models.yaml"
 _DATASETS_YAML = Path(__file__).parent / "config" / "datasets.yaml"
-_ROMP_YAML     = Path(__file__).parent / "config" / "romp.yaml"
+_ROMP_YAML = Path(__file__).parent / "config" / "romp.yaml"
 
 
 def _env_key(*parts: str) -> str:
@@ -55,7 +55,9 @@ class Settings(BaseSettings):
 
     job_runner: str = "docker"
     romp_image: str = "romp:latest"
-    romp_wrapper_image: str = ""  # if set, used instead of romp_image for Cloud Run jobs
+    romp_wrapper_image: str = (
+        ""  # if set, used instead of romp_image for Cloud Run jobs
+    )
     job_timeout_seconds: int = 3600
     job_cpu: str = "4"
     job_memory: str = "16Gi"
@@ -74,6 +76,22 @@ class Settings(BaseSettings):
     # from env; these fields just make them available for validation/logging.
     modal_token_id: str = ""
     modal_token_secret: str = ""
+
+    # ---------------------------------------------------------------------------
+    # LLM — OpenAI chat-completions-compatible client.
+    # Examples:
+    #   Modal vLLM: llm_base_url="https://xxx--almanac-llm.modal.run/v1", llm_model="Qwen/Qwen2.5-Coder-7B-Instruct"
+    #   Ollama:     llm_base_url="http://localhost:11434/v1", llm_model="qwen2.5-coder"
+    # ---------------------------------------------------------------------------
+    llm_base_url: str = ""
+    llm_model: str = "claude-sonnet-4-6"
+    llm_api_key: str = "placeholder"
+    llm_timeout_seconds: float = 60.0
+    llm_tool_result_max_chars: int = 12000
+    llm_code_context_max_chars: int = 6000
+    enable_run_code: bool = True
+    enable_run_code_sandbox: bool = True
+    chat_figure_signing_secret: str = "dev-chat-figure-secret"
 
     # ---------------------------------------------------------------------------
     # Auth
@@ -97,6 +115,7 @@ settings = Settings()
 # ---------------------------------------------------------------------------
 # Model registry
 # ---------------------------------------------------------------------------
+
 
 def get_model_registry() -> list[dict]:
     """Load model definitions from models.yaml; resolve model_dir from env vars.
@@ -152,10 +171,12 @@ def get_demo_datasets() -> list[dict]:
         obs_dir = os.environ.get(env_key, "")
         if not obs_dir:
             continue
-        result.append({
-            "id": "demo:" + entry["id"],
-            "name": entry["name"],
-            "obs_dir": obs_dir,
-            "obs_file_pattern": entry.get("obs_file_pattern"),
-        })
+        result.append(
+            {
+                "id": "demo:" + entry["id"],
+                "name": entry["name"],
+                "obs_dir": obs_dir,
+                "obs_file_pattern": entry.get("obs_file_pattern"),
+            }
+        )
     return result

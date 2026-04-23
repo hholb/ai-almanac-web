@@ -11,13 +11,59 @@ Both implementations share the same interface so routers don't need to care.
 from __future__ import annotations
 
 import datetime
-import os
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 # HDF5/NetCDF4 is not thread-safe. Serialize all dataset opens with this lock.
 _nc_lock = threading.Lock()
+
+_CHAT_FIGURE_FORMATS: tuple[tuple[bytes, str, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", ".png", "image/png"),
+    (b"RIFF", ".webp", "image/webp"),
+    (b"\xff\xd8\xff", ".jpg", "image/jpeg"),
+    (b"GIF87a", ".gif", "image/gif"),
+    (b"GIF89a", ".gif", "image/gif"),
+)
+
+
+def detect_chat_figure_format(data: bytes) -> tuple[str, str]:
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp", "image/webp"
+    for magic, ext, content_type in _CHAT_FIGURE_FORMATS:
+        if data.startswith(magic):
+            return ext, content_type
+    return ".bin", "application/octet-stream"
+
+
+def guess_chat_figure_media_type(path: Path) -> str:
+    try:
+        return detect_chat_figure_format(path.read_bytes())[1]
+    except Exception:
+        if path.suffix == ".png":
+            return "image/png"
+        if path.suffix in (".jpg", ".jpeg"):
+            return "image/jpeg"
+        if path.suffix == ".gif":
+            return "image/gif"
+        return "image/webp"
+
+
+def _chat_figure_candidates(base: Path, figure_id: str) -> list[Path]:
+    return [
+        base / "chat-figures" / f"{figure_id}{ext}"
+        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
+    ]
+
+
+def _chat_figure_storage_keys(storage_key: str) -> list[str]:
+    key = Path(storage_key).name
+    if Path(key).suffix:
+        return [f"chat-figures/{key}"]
+    return [
+        f"chat-figures/{key}{ext}"
+        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin")
+    ]
 
 
 class StorageBackend(ABC):
@@ -78,6 +124,22 @@ class StorageBackend(ABC):
     def open_nc_dataset(self, path):
         """Open a NetCDF path/URI and return an xarray Dataset."""
 
+    @abstractmethod
+    def save_chat_figure(self, figure_id: str, data: bytes) -> None:
+        """Persist a chat figure by ID."""
+
+    @abstractmethod
+    def chat_figure_local_path(self, figure_id: str) -> Path | None:
+        """Return a local Path to serve via FileResponse, or None for GCS."""
+
+    @abstractmethod
+    def chat_figure_redirect_url(self, figure_id: str) -> str | None:
+        """Return a signed GCS URL to redirect to, or None for local storage."""
+
+    @abstractmethod
+    def delete_chat_figure(self, storage_key: str) -> None:
+        """Best-effort deletion of a stored chat figure by storage key or figure ID."""
+
     @property
     def is_local(self) -> bool:
         return isinstance(self, LocalStorage)
@@ -86,6 +148,7 @@ class StorageBackend(ABC):
 # ---------------------------------------------------------------------------
 # Local implementation
 # ---------------------------------------------------------------------------
+
 
 class LocalStorage(StorageBackend):
     def __init__(self, upload_dir: str, job_outputs_dir: str):
@@ -130,7 +193,11 @@ class LocalStorage(StorageBackend):
 
     def list_nc_output_files(self, job_id: str) -> list:
         output_dir = self._outputs_dir / job_id / "output"
-        return sorted(output_dir.glob("spatial_metrics_*.nc")) if output_dir.exists() else []
+        return (
+            sorted(output_dir.glob("spatial_metrics_*.nc"))
+            if output_dir.exists()
+            else []
+        )
 
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         output_dir = self._outputs_dir / job_id / "output"
@@ -142,8 +209,32 @@ class LocalStorage(StorageBackend):
 
     def open_nc_dataset(self, path):
         import xarray as xr
+
         with _nc_lock:
             return xr.load_dataset(path)
+
+    def save_chat_figure(self, figure_id: str, data: bytes) -> None:
+        ext, _ = detect_chat_figure_format(data)
+        path = self._outputs_dir / "chat-figures" / f"{figure_id}{ext}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def chat_figure_local_path(self, figure_id: str) -> Path | None:
+        for candidate in _chat_figure_candidates(self._outputs_dir, figure_id):
+            if candidate.exists():
+                return candidate
+        return self._outputs_dir / "chat-figures" / f"{figure_id}.webp"
+
+    def chat_figure_redirect_url(self, figure_id: str) -> str | None:
+        return None
+
+    def delete_chat_figure(self, storage_key: str) -> None:
+        for candidate_key in _chat_figure_storage_keys(storage_key):
+            path = self._outputs_dir / candidate_key
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
 
     def log_path(self, job_id: str) -> Path:
         p = self._outputs_dir / job_id / "run.log"
@@ -159,11 +250,13 @@ class LocalStorage(StorageBackend):
 # GCS implementation
 # ---------------------------------------------------------------------------
 
+
 class GCSStorage(StorageBackend):
     _SIGNED_URL_EXPIRY = datetime.timedelta(minutes=15)
 
     def __init__(self, uploads_bucket: str, outputs_bucket: str, data_bucket: str):
         from google.cloud import storage as gcs
+
         self._client = gcs.Client()
         self._uploads_bucket = uploads_bucket
         self._outputs_bucket = outputs_bucket
@@ -224,12 +317,14 @@ class GCSStorage(StorageBackend):
 
     def list_nc_output_files(self, job_id: str) -> list:
         import gcsfs
+
         fs = gcsfs.GCSFileSystem()
         prefix = f"{self._outputs_bucket}/{job_id}/output/spatial_metrics_"
         return [f"gs://{f}" for f in sorted(fs.glob(f"{prefix}*.nc"))]
 
     def find_nc_output_file(self, job_id: str, model: str, window: str) -> str | None:
         import gcsfs
+
         fs = gcsfs.GCSFileSystem()
         base = f"{self._outputs_bucket}/{job_id}/output"
         for w in (window, window.replace("-", ",")):
@@ -241,9 +336,38 @@ class GCSStorage(StorageBackend):
     def open_nc_dataset(self, path):
         import xarray as xr
         import gcsfs
+
         fs = gcsfs.GCSFileSystem()
         with fs.open(str(path).removeprefix("gs://"), "rb") as f:
             return xr.load_dataset(f, engine="h5netcdf")
+
+    def save_chat_figure(self, figure_id: str, data: bytes) -> None:
+        ext, content_type = detect_chat_figure_format(data)
+        blob = self._bucket(self._outputs_bucket).blob(f"chat-figures/{figure_id}{ext}")
+        blob.upload_from_string(data, content_type=content_type)
+
+    def chat_figure_local_path(self, figure_id: str) -> Path | None:
+        return None
+
+    def chat_figure_redirect_url(self, figure_id: str) -> str | None:
+        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bin"):
+            blob = self._bucket(self._outputs_bucket).blob(
+                f"chat-figures/{figure_id}{ext}"
+            )
+            if blob.exists():
+                return blob.generate_signed_url(
+                    version="v4",
+                    expiration=self._SIGNED_URL_EXPIRY,
+                    method="GET",
+                )
+        return None
+
+    def delete_chat_figure(self, storage_key: str) -> None:
+        for candidate_key in _chat_figure_storage_keys(storage_key):
+            try:
+                self._bucket(self._outputs_bucket).blob(candidate_key).delete()
+            except Exception:
+                continue
 
     def read_log(self, job_id: str) -> str:
         blob = self._bucket(self._outputs_bucket).blob(f"{job_id}/run.log")
@@ -266,6 +390,7 @@ def get_storage() -> StorageBackend:
 
 def _make_storage() -> StorageBackend:
     from ..config import settings
+
     backend = settings.storage_backend.lower()
     if backend == "gcs":
         return GCSStorage(

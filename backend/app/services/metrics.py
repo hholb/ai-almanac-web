@@ -3,6 +3,7 @@
 All functions here are synchronous and intended to be called via
 asyncio.to_thread() from the async route handlers in routers/jobs.py.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel
@@ -66,6 +67,7 @@ class JobGridResponse(BaseModel):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_nc_files(storage: StorageBackend, job_id: str) -> list:
     return storage.list_nc_output_files(job_id)
 
@@ -77,6 +79,7 @@ def _open_nc(storage: StorageBackend, path):
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def compute_job_metrics(
     job_id: str,
@@ -111,10 +114,14 @@ def compute_job_metrics(
         if has_bbox:
             lats = ds.lat.values
             lons = ds.lon.values
-            if lat_min is not None: lats = lats[lats >= lat_min]
-            if lat_max is not None: lats = lats[lats <= lat_max]
-            if lon_min is not None: lons = lons[lons >= lon_min]
-            if lon_max is not None: lons = lons[lons <= lon_max]
+            if lat_min is not None:
+                lats = lats[lats >= lat_min]
+            if lat_max is not None:
+                lats = lats[lats <= lat_max]
+            if lon_min is not None:
+                lons = lons[lons >= lon_min]
+            if lon_max is not None:
+                lons = lons[lons <= lon_max]
             ds = ds.sel(lat=lats, lon=lons)
 
         if actual_bbox is None and "lat" in ds.coords and "lon" in ds.coords:
@@ -122,13 +129,17 @@ def compute_job_metrics(
             lons = ds.lon.values
             if len(lats) and len(lons):
                 actual_bbox = {
-                    "lat_min": float(lats.min()), "lat_max": float(lats.max()),
-                    "lon_min": float(lons.min()), "lon_max": float(lons.max()),
+                    "lat_min": float(lats.min()),
+                    "lat_max": float(lats.max()),
+                    "lon_min": float(lons.min()),
+                    "lon_max": float(lons.max()),
                 }
 
         model = str(ds.attrs.get("model", ""))
         window_label = str(ds.attrs.get("verification_window", "")).replace(",", "-")
-        tolerance_days = int(ds.attrs["tolerance_days"]) if "tolerance_days" in ds.attrs else None
+        tolerance_days = (
+            int(ds.attrs["tolerance_days"]) if "tolerance_days" in ds.attrs else None
+        )
 
         metrics: dict[str, MetricStats] = {}
         for var in ds.data_vars:
@@ -148,12 +159,14 @@ def compute_job_metrics(
                 unit=UNIT_MAP.get(var_str, "days"),
             )
         ds.close()
-        windows.append(WindowMetrics(
-            window=window_label,
-            model=model,
-            tolerance_days=tolerance_days,
-            metrics=metrics,
-        ))
+        windows.append(
+            WindowMetrics(
+                window=window_label,
+                model=model,
+                tolerance_days=tolerance_days,
+                metrics=metrics,
+            )
+        )
 
     windows.sort(key=lambda w: (w.model == "climatology", w.window))
     return JobMetrics(job_id=job_id, windows=windows, grid=grid_info, bbox=actual_bbox)
@@ -202,6 +215,14 @@ def compute_job_grid(
 
     ds.close()
     return JobGridResponse(
-        job_id=job_id, model=model, window=window, metric=metric,
-        lats=lats, lons=lons, values=values, unit=unit, min=v_min, max=v_max,
+        job_id=job_id,
+        model=model,
+        window=window,
+        metric=metric,
+        lats=lats,
+        lons=lons,
+        values=values,
+        unit=unit,
+        min=v_min,
+        max=v_max,
     )

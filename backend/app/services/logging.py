@@ -1,4 +1,5 @@
 """Shared Cloud Logging helpers used by both the jobs router and runner service."""
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ def fetch_cloud_logs(
     """
     try:
         from google.cloud import logging as gcloud_logging
+
         client = gcloud_logging.Client()
         order = gcloud_logging.DESCENDING if descending else gcloud_logging.ASCENDING
         entries = client.list_entries(

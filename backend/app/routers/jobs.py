@@ -4,7 +4,6 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import RedirectResponse
@@ -12,15 +11,16 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from ..auth import CurrentUser
-from ..config import settings, get_model_registry, get_demo_datasets
+from ..config import get_model_registry, get_demo_datasets
 from ..database import get_db
 from ..services.runner import get_runner
 from ..services.storage import get_storage
 from ..services.logging import fetch_cloud_logs
 from ..services.metrics import (
-    compute_job_metrics, compute_job_grid,
-    JobMetrics, JobGridResponse,
-    MetricStats, WindowMetrics, GridInfo,
+    compute_job_metrics,
+    compute_job_grid,
+    JobMetrics,
+    JobGridResponse,
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class RompParams(BaseModel):
     obs: str | None = None
@@ -84,13 +85,14 @@ class JobOut(BaseModel):
 
 class ResultFile(BaseModel):
     name: str
-    type: str   # "output" | "figure"
+    type: str  # "output" | "figure"
     url: str
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _row_to_job_out(row: dict, current_user_id: str | None = None) -> JobOut:
     cfg = json.loads(row.get("config_json") or "{}")
@@ -119,12 +121,21 @@ async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str
         demo_map = {d["id"]: d["obs_dir"] for d in get_demo_datasets()}
         obs_dir = demo_map.get(dataset_id)
         if not obs_dir:
-            raise HTTPException(status_code=400, detail=f"Unknown demo dataset: {dataset_id!r}")
+            raise HTTPException(
+                status_code=400, detail=f"Unknown demo dataset: {dataset_id!r}"
+            )
         return obs_dir
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT storage_key FROM datasets WHERE id = :id"), {"id": dataset_id}
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT storage_key FROM datasets WHERE id = :id"),
+                    {"id": dataset_id},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
     if not row or not row["storage_key"]:
         raise HTTPException(status_code=400, detail="Dataset has no storage_key")
     return get_storage().resolve_obs_path(row["storage_key"])
@@ -134,11 +145,14 @@ async def _resolve_obs_dir(dataset_id: str, obs_dir_override: str | None) -> str
 # Routes
 # ---------------------------------------------------------------------------
 
+
 @router.get("/models")
 async def list_models(region: str | None = None):
     registry = get_model_registry()
     if region:
-        registry = [m for m in registry if m.get("region", "").lower() == region.lower()]
+        registry = [
+            m for m in registry if m.get("region", "").lower() == region.lower()
+        ]
     return registry
 
 
@@ -147,29 +161,47 @@ async def create_job(body: JobCreate, user: CurrentUser):
     if body.dataset_id.startswith("demo:"):
         demo_map = {d["id"]: d for d in get_demo_datasets()}
         if body.dataset_id not in demo_map:
-            raise HTTPException(status_code=404, detail=f"Unknown demo dataset: {body.dataset_id!r}")
+            raise HTTPException(
+                status_code=404, detail=f"Unknown demo dataset: {body.dataset_id!r}"
+            )
     else:
         async with get_db() as conn:
-            ds = (await conn.execute(
-                text("SELECT * FROM datasets WHERE id = :id AND user_id = :uid"),
-                {"id": body.dataset_id, "uid": user["id"]},
-            )).mappings().fetchone()
+            ds = (
+                (
+                    await conn.execute(
+                        text(
+                            "SELECT * FROM datasets WHERE id = :id AND user_id = :uid"
+                        ),
+                        {"id": body.dataset_id, "uid": user["id"]},
+                    )
+                )
+                .mappings()
+                .fetchone()
+            )
         if not ds:
             raise HTTPException(status_code=404, detail="Dataset not found")
         if ds["status"] != "ready":
-            raise HTTPException(status_code=409, detail=f"Dataset is not ready (status: {ds['status']})")
+            raise HTTPException(
+                status_code=409, detail=f"Dataset is not ready (status: {ds['status']})"
+            )
 
     region = (body.params.region or "").lower()
     registry = get_model_registry()
     model_cfg = next(
-        (m for m in registry if m["id"] == body.model_name and m.get("region", "").lower() == region),
+        (
+            m
+            for m in registry
+            if m["id"] == body.model_name and m.get("region", "").lower() == region
+        ),
         None,
     ) or next(
         (m for m in registry if m["id"] == body.model_name),
         None,
     )
     if not model_cfg:
-        raise HTTPException(status_code=400, detail=f"Unknown model: {body.model_name!r}")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown model: {body.model_name!r}"
+        )
 
     obs_dir = await _resolve_obs_dir(body.dataset_id, body.obs_dir)
 
@@ -177,9 +209,17 @@ async def create_job(body: JobCreate, user: CurrentUser):
     now = datetime.now(timezone.utc).isoformat()
 
     romp_params = body.params.model_dump(exclude_none=True)
-    for key in ("date_filter_year", "probabilistic", "members",
-                "start_date", "end_date", "start_year_clim", "end_year_clim",
-                "init_days", "max_forecast_day"):
+    for key in (
+        "date_filter_year",
+        "probabilistic",
+        "members",
+        "start_date",
+        "end_date",
+        "start_year_clim",
+        "end_year_clim",
+        "init_days",
+        "max_forecast_day",
+    ):
         if key not in romp_params and model_cfg.get(key) is not None:
             romp_params[key] = model_cfg[key]
 
@@ -191,17 +231,25 @@ async def create_job(body: JobCreate, user: CurrentUser):
 
     config = {
         "model_name": body.model_name,
-        "obs_dir":    obs_dir,
-        "model_dir":  model_cfg["model_dir"],
+        "obs_dir": obs_dir,
+        "model_dir": model_cfg["model_dir"],
         "romp_params": romp_params,
     }
 
     async with get_db() as conn:
         result = await conn.execute(
-            text("INSERT INTO jobs (id, user_id, dataset_id, status, config_json, run_id, created_at, started_at) "
-                 "VALUES (:id, :uid, :did, 'running', :cfg, :run_id, :now, :now) RETURNING *"),
-            {"id": job_id, "uid": user["id"], "did": body.dataset_id,
-             "cfg": json.dumps(config), "run_id": body.run_id, "now": now},
+            text(
+                "INSERT INTO jobs (id, user_id, dataset_id, status, config_json, run_id, created_at, started_at) "
+                "VALUES (:id, :uid, :did, 'running', :cfg, :run_id, :now, :now) RETURNING *"
+            ),
+            {
+                "id": job_id,
+                "uid": user["id"],
+                "did": body.dataset_id,
+                "cfg": json.dumps(config),
+                "run_id": body.run_id,
+                "now": now,
+            },
         )
         row = dict(result.mappings().fetchone())
 
@@ -212,20 +260,34 @@ async def create_job(body: JobCreate, user: CurrentUser):
 @router.get("", response_model=list[JobOut])
 async def list_jobs(user: CurrentUser):
     async with get_db() as conn:
-        rows = (await conn.execute(
-            text("SELECT * FROM jobs WHERE user_id = :uid ORDER BY created_at DESC"),
-            {"uid": user["id"]},
-        )).mappings().fetchall()
+        rows = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT * FROM jobs WHERE user_id = :uid ORDER BY created_at DESC"
+                    ),
+                    {"uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchall()
+        )
     return [_row_to_job_out(dict(r), user["id"]) for r in rows]
 
 
 @router.get("/{job_id}", response_model=JobOut)
 async def get_job(job_id: str, user: CurrentUser):
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT * FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user["id"]},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT * FROM jobs WHERE id = :id AND user_id = :uid"),
+                    {"id": job_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     return _row_to_job_out(dict(row), user["id"])
@@ -234,10 +296,12 @@ async def get_job(job_id: str, user: CurrentUser):
 @router.get("/{job_id}/logs")
 async def get_logs(job_id: str, user: CurrentUser) -> dict:
     async with get_db() as conn:
-        found = (await conn.execute(
-            text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user["id"]},
-        )).fetchone()
+        found = (
+            await conn.execute(
+                text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
+            )
+        ).fetchone()
     if not found:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -257,14 +321,22 @@ async def get_logs(job_id: str, user: CurrentUser) -> dict:
 @router.get("/{job_id}/results", response_model=list[ResultFile])
 async def get_results(job_id: str, user: CurrentUser):
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user["id"]},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                    {"id": job_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     if row["status"] != "complete":
-        raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
+        raise HTTPException(
+            status_code=409, detail=f"Job is not complete (status: {row['status']})"
+        )
 
     storage = get_storage()
     files = await asyncio.to_thread(storage.list_result_files, job_id)
@@ -285,14 +357,22 @@ async def get_result_file(job_id: str, kind: str, filename: str, user: CurrentUs
         raise HTTPException(status_code=400, detail="kind must be 'output' or 'figure'")
 
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user["id"]},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                    {"id": job_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     if row["status"] != "complete":
-        raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
+        raise HTTPException(
+            status_code=409, detail=f"Job is not complete (status: {row['status']})"
+        )
 
     storage = get_storage()
     local_path = storage.result_file_path(job_id, kind, filename)
@@ -301,9 +381,12 @@ async def get_result_file(job_id: str, kind: str, filename: str, user: CurrentUs
         if not local_path.exists():
             raise HTTPException(status_code=404, detail="File not found")
         from fastapi.responses import FileResponse
+
         return FileResponse(local_path)
     else:
-        signed_url = await asyncio.to_thread(storage.generate_result_url, job_id, kind, filename)
+        signed_url = await asyncio.to_thread(
+            storage.generate_result_url, job_id, kind, filename
+        )
         return RedirectResponse(url=signed_url, status_code=302)
 
 
@@ -319,14 +402,24 @@ async def get_metrics(
     has_bbox = any(v is not None for v in (lat_min, lat_max, lon_min, lon_max))
 
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT status, metrics_cache FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user["id"]},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT status, metrics_cache FROM jobs WHERE id = :id AND user_id = :uid"
+                    ),
+                    {"id": job_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     if row["status"] != "complete":
-        raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
+        raise HTTPException(
+            status_code=409, detail=f"Job is not complete (status: {row['status']})"
+        )
 
     # Return cached result when no bbox filter is applied.
     if not has_bbox and row["metrics_cache"]:
@@ -334,7 +427,13 @@ async def get_metrics(
 
     try:
         result = await asyncio.to_thread(
-            compute_job_metrics, job_id, get_storage(), lat_min, lat_max, lon_min, lon_max
+            compute_job_metrics,
+            job_id,
+            get_storage(),
+            lat_min,
+            lat_max,
+            lon_min,
+            lon_max,
         )
     except Exception as e:
         logger.exception("Error computing metrics for job %s", job_id)
@@ -352,35 +451,55 @@ async def get_metrics(
 
 
 @router.get("/{job_id}/grid", response_model=JobGridResponse)
-async def get_grid(job_id: str, user: CurrentUser, model: str, window: str, metric: str):
+async def get_grid(
+    job_id: str, user: CurrentUser, model: str, window: str, metric: str
+):
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user["id"]},
-        )).mappings().fetchone()
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                    {"id": job_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     if row["status"] != "complete":
-        raise HTTPException(status_code=409, detail=f"Job is not complete (status: {row['status']})")
+        raise HTTPException(
+            status_code=409, detail=f"Job is not complete (status: {row['status']})"
+        )
 
     try:
-        return await asyncio.to_thread(compute_job_grid, job_id, get_storage(), model, window, metric)
+        return await asyncio.to_thread(
+            compute_job_grid, job_id, get_storage(), model, window, metric
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.exception("Error computing grid for job %s model=%s window=%s metric=%s", job_id, model, window, metric)
+        logger.exception(
+            "Error computing grid for job %s model=%s window=%s metric=%s",
+            job_id,
+            model,
+            window,
+            metric,
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_job(job_id: str, user: CurrentUser):
     async with get_db() as conn:
-        row = (await conn.execute(
-            text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
-            {"id": job_id, "uid": user["id"]},
-        )).fetchone()
+        row = (
+            await conn.execute(
+                text("SELECT id FROM jobs WHERE id = :id AND user_id = :uid"),
+                {"id": job_id, "uid": user["id"]},
+            )
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Job not found")
         await conn.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": job_id})
@@ -388,6 +507,7 @@ async def delete_job(job_id: str, user: CurrentUser):
     storage = get_storage()
     if storage.is_local:
         import shutil
+
         output_uri, _ = storage.job_output_uri(job_id)
         job_dir = Path(output_uri).parent
         if job_dir.exists():

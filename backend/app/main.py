@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import config, datasets, jobs, regions
+from .routers import chat, config, datasets, jobs, regions
 from .services.storage import get_storage
 
 logging.basicConfig(
@@ -37,8 +37,15 @@ async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
-    logger.info("%s %s %d %.1fms", request.method, request.url.path, response.status_code, duration_ms)
+    logger.info(
+        "%s %s %d %.1fms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
     return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,6 +55,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(chat.router)
 app.include_router(config.router)
 app.include_router(datasets.router)
 app.include_router(jobs.router)
@@ -68,6 +76,7 @@ async def health():
 
 storage = get_storage()
 if storage.is_local:
+
     @app.put("/upload/{storage_key:path}", status_code=status.HTTP_200_OK)
     async def local_upload(storage_key: str, request: Request):
         dest = Path(settings.upload_dir) / storage_key

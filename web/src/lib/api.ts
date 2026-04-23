@@ -1,108 +1,108 @@
-const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
-import { getManager } from "./auth";
+import { getManager } from './auth';
 
 function authHeaders(): HeadersInit {
-  const manager = getManager();
-  if (!manager) throw new Error("Not authenticated");
-  const authToken = manager.getGlobusAuthToken();
-  const apiToken = authToken?.other_tokens?.find(
-    (t: any) => t.resource_server === "50964632-afc7-4d4c-abf4-b288cc18a3af"
-  );
-  if (!apiToken) throw new Error("API token not found — re-login may be required");
-  return { Authorization: `Bearer ${apiToken.access_token}` };
+	const manager = getManager();
+	if (!manager) throw new Error('Not authenticated');
+	const authToken = manager.getGlobusAuthToken();
+	const apiToken = authToken?.other_tokens?.find(
+		(t: any) => t.resource_server === '50964632-afc7-4d4c-abf4-b288cc18a3af'
+	);
+	if (!apiToken) throw new Error('API token not found — re-login may be required');
+	return { Authorization: `Bearer ${apiToken.access_token}` };
 }
 
 async function request<T>(path: string, init: RequestInit = {}, _retry = false): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...authHeaders(), ...init.headers },
-  });
+	const res = await fetch(`${BASE_URL}${path}`, {
+		...init,
+		headers: { 'Content-Type': 'application/json', ...authHeaders(), ...init.headers }
+	});
 
-  if (res.status === 401 && !_retry) {
-    const manager = getManager();
-    if (manager) {
-      try {
-        await manager.refreshTokens();
-        return request<T>(path, init, true);
-      } catch {
-        await manager.revoke();
-        throw new Error("Session expired — please log in again.");
-      }
-    }
-  }
+	if (res.status === 401 && !_retry) {
+		const manager = getManager();
+		if (manager) {
+			try {
+				await manager.refreshTokens();
+				return request<T>(path, init, true);
+			} catch {
+				await manager.revoke();
+				throw new Error('Session expired — please log in again.');
+			}
+		}
+	}
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`${init.method ?? "GET"} ${path} failed (${res.status}): ${body}`);
-  }
-  if (res.status === 204 || res.headers.get("content-length") === "0") {
-    return undefined as T;
-  }
-  return res.json();
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`${init.method ?? 'GET'} ${path} failed (${res.status}): ${body}`);
+	}
+	if (res.status === 204 || res.headers.get('content-length') === '0') {
+		return undefined as T;
+	}
+	return res.json();
 }
 
 // ---- Config ------------------------------------------------------------------
 
 export async function getMetricDefinitions() {
-  return request<MetricDefinition[]>("/config/metrics");
+	return request<MetricDefinition[]>('/config/metrics');
 }
 
 export async function getRompDefaults() {
-  return request<RompDefaults>("/config/romp-defaults");
+	return request<RompDefaults>('/config/romp-defaults');
 }
 
 // ---- Regions -----------------------------------------------------------------
 
 export async function getRegions() {
-  return request<Region[]>("/regions");
+	return request<Region[]>('/regions');
 }
 
 // ---- Datasets ----------------------------------------------------------------
 
 export async function getDatasets() {
-  return request<Dataset[]>("/datasets");
+	return request<Dataset[]>('/datasets');
 }
 
 export async function createDatasetFromPath(name: string, obs_dir: string) {
-  return request<Dataset>("/datasets/from-path", {
-    method: "POST",
-    body: JSON.stringify({ name, obs_dir }),
-  });
+	return request<Dataset>('/datasets/from-path', {
+		method: 'POST',
+		body: JSON.stringify({ name, obs_dir })
+	});
 }
 
 // ---- Jobs --------------------------------------------------------------------
 
 export async function getModels(region?: string) {
-  const qs = region ? `?region=${encodeURIComponent(region)}` : "";
-  return request<ModelConfig[]>(`/jobs/models${qs}`);
+	const qs = region ? `?region=${encodeURIComponent(region)}` : '';
+	return request<ModelConfig[]>(`/jobs/models${qs}`);
 }
 
 export async function getJobs() {
-  return request<Job[]>("/jobs");
+	return request<Job[]>('/jobs');
 }
 
 export async function submitJob(params: SubmitJobParams) {
-  return request<Job>("/jobs", {
-    method: "POST",
-    body: JSON.stringify(params),
-  });
+	return request<Job>('/jobs', {
+		method: 'POST',
+		body: JSON.stringify(params)
+	});
 }
 
 export async function getJob(id: string) {
-  return request<Job>(`/jobs/${id}`);
+	return request<Job>(`/jobs/${id}`);
 }
 
 export async function getJobResults(id: string) {
-  return request<JobResult[]>(`/jobs/${id}/results`);
+	return request<JobResult[]>(`/jobs/${id}/results`);
 }
 
 export async function getJobLogs(id: string) {
-  return request<{ logs: string }>(`/jobs/${id}/logs`);
+	return request<{ logs: string }>(`/jobs/${id}/logs`);
 }
 
 export async function deleteJob(id: string): Promise<void> {
-  await request<void>(`/jobs/${id}`, { method: "DELETE" });
+	await request<void>(`/jobs/${id}`, { method: 'DELETE' });
 }
 
 /**
@@ -113,239 +113,405 @@ export async function deleteJob(id: string): Promise<void> {
 const blobCache = new Map<string, string>();
 
 export async function fetchResultBlob(resultUrl: string): Promise<string> {
-  if (blobCache.has(resultUrl)) return blobCache.get(resultUrl)!;
+	if (blobCache.has(resultUrl)) return blobCache.get(resultUrl)!;
 
-  // First, hit the backend with auth to get the file or a signed-URL redirect.
-  const res = await fetch(`${BASE_URL}${resultUrl}`, {
-    headers: authHeaders(),
-    redirect: "manual",  // don't auto-follow so we can strip auth before GCS redirect
-  });
+	// First, hit the backend with auth to get the file or a signed-URL redirect.
+	const res = await fetch(`${BASE_URL}${resultUrl}`, {
+		headers: authHeaders(),
+		redirect: 'manual' // don't auto-follow so we can strip auth before GCS redirect
+	});
 
-  let blob: Blob;
-  if (res.type === "opaqueredirect") {
-    // Production: backend returned a 302 to a GCS signed URL.
-    // Fetch the redirect location without the Authorization header — GCS rejects it.
-    const location = res.headers.get("Location");
-    if (!location) throw new Error("Redirect response missing Location header");
-    const gcsRes = await fetch(location);
-    if (!gcsRes.ok) throw new Error(`Failed to fetch result from GCS: ${gcsRes.status}`);
-    blob = await gcsRes.blob();
-  } else if (res.ok) {
-    // Local dev: backend served the file directly.
-    blob = await res.blob();
-  } else {
-    throw new Error(`Failed to fetch result: ${res.status}`);
-  }
+	let blob: Blob;
+	if (res.type === 'opaqueredirect') {
+		// Production: backend returned a 302 to a GCS signed URL.
+		// Fetch the redirect location without the Authorization header — GCS rejects it.
+		const location = res.headers.get('Location');
+		if (!location) throw new Error('Redirect response missing Location header');
+		const gcsRes = await fetch(location);
+		if (!gcsRes.ok) throw new Error(`Failed to fetch result from GCS: ${gcsRes.status}`);
+		blob = await gcsRes.blob();
+	} else if (res.ok) {
+		// Local dev: backend served the file directly.
+		blob = await res.blob();
+	} else {
+		throw new Error(`Failed to fetch result: ${res.status}`);
+	}
 
-  const objectUrl = URL.createObjectURL(blob);
-  blobCache.set(resultUrl, objectUrl);
-  return objectUrl;
+	const objectUrl = URL.createObjectURL(blob);
+	blobCache.set(resultUrl, objectUrl);
+	return objectUrl;
 }
 
 // ---- Types -------------------------------------------------------------------
 
 export type Region = {
-  id: string;
-  display_name: string;
-  romp_region: string;
-  description: string;
-  has_data: boolean;
+	id: string;
+	display_name: string;
+	romp_region: string;
+	description: string;
+	has_data: boolean;
 };
 
 export type Dataset = {
-  id: string;
-  name: string;
-  status: string;
-  is_demo: boolean;
-  created_at: string;
-  obs_file_pattern?: string | null;
-  obs_year_start?: number | null;
-  obs_year_end?: number | null;
+	id: string;
+	name: string;
+	status: string;
+	is_demo: boolean;
+	created_at: string;
+	obs_file_pattern?: string | null;
+	obs_year_start?: number | null;
+	obs_year_end?: number | null;
 };
 
-export type JobStatus = "running" | "complete" | "failed";
+export type JobStatus = 'running' | 'complete' | 'failed';
 
 export type Job = {
-  id: string;
-  status: JobStatus;
-  dataset_id: string;
-  model_name: string;
-  model_dir?: string;
-  obs_dir?: string;
-  params?: JobParams;
-  created_at?: string;
-  started_at?: string;
-  completed_at?: string;
-  error?: string | null;
-  is_owner?: boolean;
-  run_id?: string | null;
+	id: string;
+	status: JobStatus;
+	dataset_id: string;
+	model_name: string;
+	model_dir?: string;
+	obs_dir?: string;
+	params?: JobParams;
+	created_at?: string;
+	started_at?: string;
+	completed_at?: string;
+	error?: string | null;
+	is_owner?: boolean;
+	run_id?: string | null;
 };
 
 export type JobParams = {
-  // Essential
-  region?: string;
-  start_date?: string;
-  end_date?: string;
-  event_type?: string;
-  // Common
-  start_year_clim?: number;
-  end_year_clim?: number;
-  max_forecast_day?: number;
-  init_days?: string;
-  parallel?: boolean;
-  // Advanced — obs overrides
-  obs?: string;
-  obs_file_pattern?: string;
-  obs_var?: string;
-  model_var?: string;
-  file_pattern?: string;
-  // Advanced — wet/dry spell thresholds
-  wet_threshold?: number;
-  wet_init?: number;
-  wet_spell?: number;
-  dry_spell?: number;
-  dry_extent?: number;
-  // Advanced — probabilistic
-  probabilistic?: boolean;
-  members?: string;
-  // Advanced — reference model
-  ref_model?: string;
-  ref_model_dir?: string;
-  // Advanced — masks/thresholds
-  nc_mask?: string;
-  thresh_file?: string;
+	// Essential
+	region?: string;
+	start_date?: string;
+	end_date?: string;
+	event_type?: string;
+	// Common
+	start_year_clim?: number;
+	end_year_clim?: number;
+	max_forecast_day?: number;
+	init_days?: string;
+	parallel?: boolean;
+	// Advanced — obs overrides
+	obs?: string;
+	obs_file_pattern?: string;
+	obs_var?: string;
+	model_var?: string;
+	file_pattern?: string;
+	// Advanced — wet/dry spell thresholds
+	wet_threshold?: number;
+	wet_init?: number;
+	wet_spell?: number;
+	dry_spell?: number;
+	dry_extent?: number;
+	// Advanced — probabilistic
+	probabilistic?: boolean;
+	members?: string;
+	// Advanced — reference model
+	ref_model?: string;
+	ref_model_dir?: string;
+	// Advanced — masks/thresholds
+	nc_mask?: string;
+	thresh_file?: string;
 };
 
 export type SubmitJobParams = {
-  dataset_id: string;
-  model_name: string;
-  params: JobParams;
-  run_id?: string;
+	dataset_id: string;
+	model_name: string;
+	params: JobParams;
+	run_id?: string;
 };
 
 export type ModelConfig = {
-  id: string;
-  display_name: string;
-  region: string;
-  model_type: string;
-  model_dir: string;
-  model_var: string;
-  unit_cvt: number | null;
-  file_pattern: string;
-  probabilistic: boolean;
-  members: string | null;
-  init_days: string;
-  start_date: string;
-  end_date: string;
-  start_year_clim: number;
-  end_year_clim: number;
+	id: string;
+	display_name: string;
+	region: string;
+	model_type: string;
+	model_dir: string;
+	model_var: string;
+	unit_cvt: number | null;
+	file_pattern: string;
+	probabilistic: boolean;
+	members: string | null;
+	init_days: string;
+	start_date: string;
+	end_date: string;
+	start_year_clim: number;
+	end_year_clim: number;
 };
 
 export type JobResult = {
-  name: string;
-  type: "figure" | "output";
-  url: string;
+	name: string;
+	type: 'figure' | 'output';
+	url: string;
 };
 
 export type MetricStats = {
-  mean: number; min: number; max: number;
-  p25: number; p50: number; p75: number; p90: number;
-  unit: string;
+	mean: number;
+	min: number;
+	max: number;
+	p25: number;
+	p50: number;
+	p75: number;
+	p90: number;
+	unit: string;
 };
 
 export type WindowMetrics = {
-  window: string;
-  model: string;
-  tolerance_days: number | null;
-  metrics: Record<string, MetricStats>;
+	window: string;
+	model: string;
+	tolerance_days: number | null;
+	metrics: Record<string, MetricStats>;
 };
 
 export type BboxExtent = {
-  lat_min: number; lat_max: number;
-  lon_min: number; lon_max: number;
+	lat_min: number;
+	lat_max: number;
+	lon_min: number;
+	lon_max: number;
 };
 
 export type GridInfo = {
-  lats: number[];
-  lons: number[];
+	lats: number[];
+	lons: number[];
 };
 
 export type JobMetrics = {
-  job_id: string;
-  windows: WindowMetrics[];
-  grid: GridInfo | null;
-  bbox: BboxExtent | null;
+	job_id: string;
+	windows: WindowMetrics[];
+	grid: GridInfo | null;
+	bbox: BboxExtent | null;
 };
 
 export type BboxFilter = Partial<BboxExtent>;
 
 export async function getJobMetrics(id: string, bbox?: BboxFilter): Promise<JobMetrics> {
-  const params = new URLSearchParams();
-  if (bbox?.lat_min != null) params.set("lat_min", String(bbox.lat_min));
-  if (bbox?.lat_max != null) params.set("lat_max", String(bbox.lat_max));
-  if (bbox?.lon_min != null) params.set("lon_min", String(bbox.lon_min));
-  if (bbox?.lon_max != null) params.set("lon_max", String(bbox.lon_max));
-  const qs = params.size ? `?${params}` : "";
-  return request<JobMetrics>(`/jobs/${id}/metrics${qs}`);
+	const params = new URLSearchParams();
+	if (bbox?.lat_min != null) params.set('lat_min', String(bbox.lat_min));
+	if (bbox?.lat_max != null) params.set('lat_max', String(bbox.lat_max));
+	if (bbox?.lon_min != null) params.set('lon_min', String(bbox.lon_min));
+	if (bbox?.lon_max != null) params.set('lon_max', String(bbox.lon_max));
+	const qs = params.size ? `?${params}` : '';
+	return request<JobMetrics>(`/jobs/${id}/metrics${qs}`);
 }
 
 export type JobGridResponse = {
-  job_id: string;
-  model: string;
-  window: string;
-  metric: string;
-  lats: number[];
-  lons: number[];
-  values: (number | null)[][];
-  unit: string;
-  min: number;
-  max: number;
+	job_id: string;
+	model: string;
+	window: string;
+	metric: string;
+	lats: number[];
+	lons: number[];
+	values: (number | null)[][];
+	unit: string;
+	min: number;
+	max: number;
 };
 
 export type MetricDefinition = {
-  id: string;
-  label: string;
-  abbreviation: string;
-  unit: string | null;
-  range?: [number, number];
-  lower_is_better?: boolean;
-  description: string;
+	id: string;
+	label: string;
+	abbreviation: string;
+	unit: string | null;
+	range?: [number, number];
+	lower_is_better?: boolean;
+	description: string;
 };
 
 export type RompDefaults = {
-  obs: string;
-  obs_file_pattern: string;
-  obs_var: string;
-  model_var: string;
-  file_pattern: string;
-  region: string;
-  nc_mask: string | null;
-  thresh_file: string | null;
-  wet_threshold: number;
-  wet_init: number;
-  wet_spell: number;
-  dry_spell: number;
-  dry_extent: number;
-  start_date: string;
-  end_date: string;
-  start_year_clim: number;
-  end_year_clim: number;
-  max_forecast_day: number;
-  probabilistic: boolean;
-  members: string;
-  parallel: boolean;
-  ref_model: string;
-  ref_model_dir: string | null;
-  init_days: string;
-  date_filter_year: number | null;
+	obs: string;
+	obs_file_pattern: string;
+	obs_var: string;
+	model_var: string;
+	file_pattern: string;
+	region: string;
+	nc_mask: string | null;
+	thresh_file: string | null;
+	wet_threshold: number;
+	wet_init: number;
+	wet_spell: number;
+	dry_spell: number;
+	dry_extent: number;
+	start_date: string;
+	end_date: string;
+	start_year_clim: number;
+	end_year_clim: number;
+	max_forecast_day: number;
+	probabilistic: boolean;
+	members: string;
+	parallel: boolean;
+	ref_model: string;
+	ref_model_dir: string | null;
+	init_days: string;
+	date_filter_year: number | null;
 };
 
 export async function getJobGrid(
-  id: string,
-  model: string,
-  window: string,
-  metric: string
+	id: string,
+	model: string,
+	window: string,
+	metric: string
 ): Promise<JobGridResponse> {
-  const params = new URLSearchParams({ model, window, metric });
-  return request<JobGridResponse>(`/jobs/${id}/grid?${params}`);
+	const params = new URLSearchParams({ model, window, metric });
+	return request<JobGridResponse>(`/jobs/${id}/grid?${params}`);
+}
+
+// ---- Chat --------------------------------------------------------------------
+
+export type ChatSession = {
+	id: string;
+	title: string | null;
+	created_at: string;
+	updated_at: string;
+	message_count: number;
+	scope: ChatScope;
+};
+
+export type ChatMessage = {
+	id: string;
+	role: 'user' | 'assistant';
+	content: string;
+	created_at: string;
+	tool_calls?: ChatToolCall[];
+	artifacts?: ChatArtifact[];
+};
+
+export type ChatScope = {
+	kind: 'benchmark_run_group' | 'job_set';
+	key: string;
+	title?: string | null;
+	job_ids: string[];
+};
+
+export type ChatArtifact = {
+	id: string;
+	kind: 'figure';
+	url: string;
+	label?: string | null;
+	filename?: string | null;
+	media_type?: string | null;
+	created_at: string;
+};
+
+export type ChatToolCall = {
+	id: string;
+	name: string;
+	status: 'running' | 'completed' | 'failed';
+	input: Record<string, unknown>;
+	result?: unknown;
+	artifacts: ChatArtifact[];
+};
+
+export type ChatSessionDetail = ChatSession & {
+	scope: ChatScope;
+	transcript: ChatMessage[];
+};
+
+export type ChatEvent =
+	| { type: 'text_delta'; turn_id: string; content: string }
+	| { type: 'tool_call'; turn_id: string; tool_call: ChatToolCall }
+	| {
+			type: 'tool_result';
+			turn_id: string;
+			tool_call_id: string;
+			status: ChatToolCall['status'];
+			result: unknown;
+	  }
+	| { type: 'artifact'; turn_id: string; tool_call_id: string; artifact: ChatArtifact }
+	| { type: 'error'; message: string; retryable?: boolean }
+	| { type: 'done'; turn: ChatMessage };
+
+export async function createChatSession(scope: ChatScope, title?: string): Promise<ChatSession> {
+	return request<ChatSession>('/chat/sessions', {
+		method: 'POST',
+		body: JSON.stringify({ scope, title })
+	});
+}
+
+export async function getChatSessions(scope?: ChatScope): Promise<ChatSession[]> {
+	const qs = scope
+		? `?scope_kind=${encodeURIComponent(scope.kind)}&scope_key=${encodeURIComponent(scope.key)}`
+		: '';
+	return request<ChatSession[]>(`/chat/sessions${qs}`);
+}
+
+export async function getChatSession(id: string): Promise<ChatSessionDetail> {
+	return request<ChatSessionDetail>(`/chat/sessions/${id}`);
+}
+
+export async function updateChatSession(
+	id: string,
+	updates: { title?: string | null }
+): Promise<ChatSession> {
+	return request<ChatSession>(`/chat/sessions/${id}`, {
+		method: 'PATCH',
+		body: JSON.stringify(updates)
+	});
+}
+
+export async function deleteChatSession(id: string): Promise<void> {
+	await request<void>(`/chat/sessions/${id}`, { method: 'DELETE' });
+}
+
+/**
+ * Send a message and return an async generator of ChatEvents parsed from SSE.
+ */
+export async function* sendChatMessage(
+	sessionId: string,
+	content: string,
+	scope?: ChatScope
+): AsyncGenerator<ChatEvent> {
+	const res = await fetch(`${BASE_URL}/chat/sessions/${sessionId}/message`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...authHeaders() },
+		body: JSON.stringify({ content, scope })
+	});
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`Chat message failed (${res.status}): ${body}`);
+	}
+
+	const reader = res.body!.getReader();
+	const decoder = new TextDecoder();
+	let buffer = '';
+	let sawTerminalEvent = false;
+
+	const parseLine = (line: string): ChatEvent | null => {
+		if (!line.startsWith('data: ')) return null;
+		try {
+			return JSON.parse(line.slice(6)) as ChatEvent;
+		} catch {
+			return null;
+		}
+	};
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split('\n');
+		buffer = lines.pop()!;
+		for (const line of lines) {
+			const event = parseLine(line);
+			if (!event) continue;
+			yield event;
+			if (event.type === 'done' || event.type === 'error') {
+				sawTerminalEvent = true;
+				return;
+			}
+		}
+	}
+
+	const finalEvent = parseLine(buffer.trimEnd());
+	if (finalEvent) {
+		yield finalEvent;
+		if (finalEvent.type === 'done' || finalEvent.type === 'error') {
+			sawTerminalEvent = true;
+		}
+	}
+
+	if (!sawTerminalEvent) {
+		throw new Error('Chat stream ended before a terminal event was received.');
+	}
 }
