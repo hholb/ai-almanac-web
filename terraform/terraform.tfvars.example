@@ -19,5 +19,12 @@ db_password = "changeme"      # also stored in Secret Manager after first apply
 # frontend service is created to lock down CORS on the backend.
 # frontend_url = "https://almanac-frontend-abc123-uc.a.run.app"
 
+# Chat assistant / LLM
+# Leave llm_base_url empty to keep chat disabled in production.
+# llm_base_url            = "https://your-llm-provider.example/v1"
+# llm_model               = "claude-sonnet-4-6"
+# enable_run_code         = false
+# enable_run_code_sandbox = false
+
 # Job output retention (days before GCS auto-deletes outputs)
 job_output_retention_days = 30

@@ -64,6 +64,30 @@ variable "frontend_url" {
   default     = ""
 }
 
+variable "llm_base_url" {
+  description = "OpenAI-compatible base URL for the backend chat assistant. Leave empty to disable chat."
+  type        = string
+  default     = ""
+}
+
+variable "llm_model" {
+  description = "Model name sent to the configured LLM provider."
+  type        = string
+  default     = "claude-sonnet-4-6"
+}
+
+variable "enable_run_code" {
+  description = "Whether the chat assistant may use the run_code tool."
+  type        = bool
+  default     = false
+}
+
+variable "enable_run_code_sandbox" {
+  description = "Whether the chat assistant may use the run_code_sandbox tool."
+  type        = bool
+  default     = false
+}
+
 variable "job_output_retention_days" {
   description = "Days before job output files are automatically deleted from GCS"
   type        = number

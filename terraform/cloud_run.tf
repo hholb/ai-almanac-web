@@ -181,6 +181,41 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       env {
+        name  = "LLM_BASE_URL"
+        value = var.llm_base_url
+      }
+      env {
+        name  = "LLM_MODEL"
+        value = var.llm_model
+      }
+      env {
+        name  = "ENABLE_RUN_CODE"
+        value = tostring(var.enable_run_code)
+      }
+      env {
+        name  = "ENABLE_RUN_CODE_SANDBOX"
+        value = tostring(var.enable_run_code_sandbox)
+      }
+      env {
+        name = "LLM_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.llm_api_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "CHAT_FIGURE_SIGNING_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.chat_figure_signing_secret.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
         name  = "ROMP_IMAGE"
         value = local.romp_image
       }
@@ -265,6 +300,8 @@ resource "google_cloud_run_v2_service" "backend" {
     google_secret_manager_secret_iam_member.backend_reads_globus_id,
     google_secret_manager_secret_iam_member.backend_reads_globus_secret,
     google_secret_manager_secret_iam_member.backend_reads_db_password,
+    google_secret_manager_secret_iam_member.backend_reads_llm_api_key,
+    google_secret_manager_secret_iam_member.backend_reads_chat_figure_signing_secret,
     google_secret_manager_secret_iam_member.backend_reads_modal_token_id,
     google_secret_manager_secret_iam_member.backend_reads_modal_token_secret,
   ]
