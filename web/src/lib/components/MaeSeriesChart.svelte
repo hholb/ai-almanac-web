@@ -36,9 +36,7 @@
 	const seriesDefs = $derived(buildSeriesDefs(modelResults));
 	const years = $derived(
 		[
-			...new Set(
-				modelResults.flatMap((result) => result.mae_series.map((point) => point.year))
-			)
+			...new Set(modelResults.flatMap((result) => result.mae_series.map((point) => point.year)))
 		].sort((a, b) => a - b)
 	);
 	const hasVisibleSeries = $derived(seriesDefs.some((series) => visibleSeries[series.key]));
@@ -71,7 +69,10 @@
 	}
 
 	function chartData(): uPlot.AlignedData {
-		return [years, ...seriesDefs.map((series) => years.map((year) => series.values.get(year) ?? null))];
+		return [
+			years,
+			...seriesDefs.map((series) => years.map((year) => series.values.get(year) ?? null))
+		];
 	}
 
 	function hidePointTooltip() {
