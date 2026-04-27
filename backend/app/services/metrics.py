@@ -63,6 +63,32 @@ class JobGridResponse(BaseModel):
     max: float
 
 
+class CellMetricComparison(BaseModel):
+    model: float | None
+    baseline: float | None
+    delta: float | None
+    unit: str
+
+
+class CellMaePoint(BaseModel):
+    year: int
+    model: float | None
+    baseline: float | None
+    delta: float | None
+
+
+class JobCellResponse(BaseModel):
+    job_id: str
+    model: str
+    window: str
+    requested_lat: float
+    requested_lon: float
+    lat: float
+    lon: float
+    metrics: dict[str, CellMetricComparison]
+    mae_series: list[CellMaePoint]
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -225,4 +251,100 @@ def compute_job_grid(
         unit=unit,
         min=v_min,
         max=v_max,
+    )
+
+
+def compute_job_cell(
+    job_id: str,
+    storage: StorageBackend,
+    model: str,
+    window: str,
+    lat: float,
+    lon: float,
+    baseline_model: str = "climatology",
+) -> JobCellResponse:
+    """Return model-vs-baseline metrics for the nearest grid cell."""
+    try:
+        import numpy as np
+    except ImportError:
+        raise RuntimeError("numpy/xarray not available on this server")
+
+    model_match = storage.find_nc_output_file(job_id, model, window)
+    if not model_match:
+        raise FileNotFoundError(f"Grid file for {model}/{window} not found")
+
+    baseline_match = storage.find_nc_output_file(job_id, baseline_model, window)
+    if not baseline_match:
+        raise FileNotFoundError(f"Grid file for {baseline_model}/{window} not found")
+
+    ds_model = _open_nc(storage, model_match)
+    ds_baseline = _open_nc(storage, baseline_match)
+
+    try:
+        lats = ds_model.lat.values.astype(float)
+        lons = ds_model.lon.values.astype(float)
+        lat_idx = int(np.abs(lats - lat).argmin())
+        lon_idx = int(np.abs(lons - lon).argmin())
+        cell_lat = float(lats[lat_idx])
+        cell_lon = float(lons[lon_idx])
+
+        def read_cell(ds, var: str) -> float | None:
+            if var not in ds.data_vars:
+                return None
+            da = ds[var]
+            if "lat" in da.dims and "lon" in da.dims:
+                da = da.transpose("lat", "lon")
+            value = float(da.values[lat_idx, lon_idx])
+            return None if np.isnan(value) else value
+
+        def delta(
+            model_value: float | None, baseline_value: float | None
+        ) -> float | None:
+            if model_value is None or baseline_value is None:
+                return None
+            return model_value - baseline_value
+
+        metrics: dict[str, CellMetricComparison] = {}
+        for metric in ("mean_mae", "false_alarm_rate", "miss_rate"):
+            model_value = read_cell(ds_model, metric)
+            baseline_value = read_cell(ds_baseline, metric)
+            metrics[metric] = CellMetricComparison(
+                model=model_value,
+                baseline=baseline_value,
+                delta=delta(model_value, baseline_value),
+                unit=UNIT_MAP.get(metric, "days"),
+            )
+
+        years = sorted(
+            int(str(var).removeprefix("mae_"))
+            for var in set(ds_model.data_vars).intersection(ds_baseline.data_vars)
+            if str(var).startswith("mae_") and str(var).removeprefix("mae_").isdigit()
+        )
+        mae_series = []
+        for year in years:
+            var = f"mae_{year}"
+            model_value = read_cell(ds_model, var)
+            baseline_value = read_cell(ds_baseline, var)
+            mae_series.append(
+                CellMaePoint(
+                    year=year,
+                    model=model_value,
+                    baseline=baseline_value,
+                    delta=delta(model_value, baseline_value),
+                )
+            )
+    finally:
+        ds_model.close()
+        ds_baseline.close()
+
+    return JobCellResponse(
+        job_id=job_id,
+        model=model,
+        window=window,
+        requested_lat=lat,
+        requested_lon=lon,
+        lat=cell_lat,
+        lon=cell_lon,
+        metrics=metrics,
+        mae_series=mae_series,
     )

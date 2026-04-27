@@ -19,8 +19,10 @@ from ..services.logging import fetch_cloud_logs
 from ..services.metrics import (
     compute_job_metrics,
     compute_job_grid,
+    compute_job_cell,
     JobMetrics,
     JobGridResponse,
+    JobCellResponse,
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -487,6 +489,53 @@ async def get_grid(
             model,
             window,
             metric,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{job_id}/cell", response_model=JobCellResponse)
+async def get_cell(
+    job_id: str,
+    user: CurrentUser,
+    model: str,
+    window: str,
+    lat: float,
+    lon: float,
+):
+    async with get_db() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text("SELECT status FROM jobs WHERE id = :id AND user_id = :uid"),
+                    {"id": job_id, "uid": user["id"]},
+                )
+            )
+            .mappings()
+            .fetchone()
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if row["status"] != "complete":
+        raise HTTPException(
+            status_code=409, detail=f"Job is not complete (status: {row['status']})"
+        )
+
+    try:
+        return await asyncio.to_thread(
+            compute_job_cell, job_id, get_storage(), model, window, lat, lon
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(
+            "Error computing cell for job %s model=%s window=%s lat=%s lon=%s",
+            job_id,
+            model,
+            window,
+            lat,
+            lon,
         )
         raise HTTPException(status_code=500, detail=str(e))
 

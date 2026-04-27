@@ -13,8 +13,9 @@
 	import Fill from 'ol/style/Fill';
 	import Stroke from 'ol/style/Stroke';
 	import 'ol/ol.css';
-	import { type JobGridResponse, type Job } from '$lib/api';
-	import { getCachedJobGrid } from '$lib/benchmarks.svelte';
+	import { type JobGridResponse, type Job, type JobCellResponse } from '$lib/api';
+	import { getCachedJobGrid, getCachedJobCell } from '$lib/benchmarks.svelte';
+	import GridCellInspector from '$lib/components/GridCellInspector.svelte';
 
 	type MetricDef = { value: string; label: string };
 
@@ -82,6 +83,7 @@
 	let visibleKeys = $state<Set<string>>(new Set());
 	let opacities = $state<Record<string, number>>({});
 	let activeRuns = $state<RunDef[]>([]);
+	let loadRequestId = 0;
 
 	let panelCollapsed = $state(false);
 	let fullscreen = $state(false);
@@ -90,6 +92,11 @@
 	let tooltipX = $state(0);
 	let tooltipY = $state(0);
 	let tooltipContent = $state('');
+	let selectedCell = $state<{ lat: number; lon: number } | null>(null);
+	let cellResults = $state<JobCellResponse[]>([]);
+	let cellLoading = $state(false);
+	let cellError = $state<string | null>(null);
+	let cellLoadRequestId = 0;
 
 	// ---- Derived -----------------------------------------------------------------
 
@@ -118,6 +125,38 @@
 
 	function metricLabel(metricValue: string) {
 		return metrics.find((m) => m.value === metricValue)?.label ?? metricValue;
+	}
+
+	async function loadCellResults(lat: number, lon: number, window: string, jobsSnapshot: Job[]) {
+		const requestId = ++cellLoadRequestId;
+		cellResults = [];
+		cellError = null;
+		cellLoading = true;
+		try {
+			const results = await Promise.all(
+				jobsSnapshot.map((job) => getCachedJobCell(job.id, job.model_name, window, lat, lon))
+			);
+			if (requestId !== cellLoadRequestId) return;
+			cellResults = results;
+		} catch (e) {
+			if (requestId !== cellLoadRequestId) return;
+			cellError = e instanceof Error ? e.message : 'Failed to load cell metrics';
+		} finally {
+			if (requestId !== cellLoadRequestId) return;
+			cellLoading = false;
+		}
+	}
+
+	function openCellInspector(lat: number, lon: number) {
+		selectedCell = { lat, lon };
+	}
+
+	function closeCellInspector() {
+		cellLoadRequestId++;
+		selectedCell = null;
+		cellResults = [];
+		cellError = null;
+		cellLoading = false;
 	}
 
 	// Find the value in a grid at the lat/lon closest to the given coordinates.
@@ -364,13 +403,21 @@
 
 	async function loadAll() {
 		if (!map) return;
+		const requestId = ++loadRequestId;
+		const previousVisibleKeys = new Set(visibleKeys);
+		const previousOpacities = { ...opacities };
+
 		for (const { layer } of Object.values(layers)) map.removeLayer(layer);
 		layers = {};
 		errors = {};
-		visibleKeys = new Set();
-		opacities = {};
+		loading = new Set();
 
-		if (jobs.length === 0 || metrics.length === 0) return;
+		if (jobs.length === 0 || metrics.length === 0) {
+			activeRuns = [];
+			visibleKeys = new Set();
+			opacities = {};
+			return;
+		}
 
 		// One RunDef per forecast model
 		const modelRuns: RunDef[] = jobs.map((job, i) => ({
@@ -389,13 +436,15 @@
 		activeRuns = [...modelRuns, climRun];
 
 		const firstKey = layerKey(modelRuns[0].jobId, modelRuns[0].modelName, metrics[0].value);
-		visibleKeys = new Set([firstKey]);
-		opacities = { [firstKey]: 1 };
 
 		// Mark all keys as loading
 		const allKeys = activeRuns.flatMap((run) =>
 			metrics.map((m) => layerKey(run.jobId, run.modelName, m.value))
 		);
+		const allKeySet = new Set(allKeys);
+		const preservedVisibleKeys = [...previousVisibleKeys].filter((key) => allKeySet.has(key));
+		visibleKeys = new Set(preservedVisibleKeys.length > 0 ? preservedVisibleKeys : [firstKey]);
+		opacities = Object.fromEntries(allKeys.map((key) => [key, previousOpacities[key] ?? 1]));
 		loading = new Set(allKeys);
 
 		// Fetch all grid data concurrently
@@ -418,6 +467,7 @@
 				})
 			)
 		);
+		if (requestId !== loadRequestId) return;
 
 		// Index climatology data by metric for delta computation
 		const climByMetric: Record<string, JobGridResponse> = {};
@@ -463,7 +513,20 @@
 		errors = newErrors;
 		loading = new Set();
 
-		if (layers[firstKey]) fitToLayer(layers[firstKey].layer);
+		const loadedVisibleKeys = [...visibleKeys].filter((key) => layers[key]);
+		if (loadedVisibleKeys.length === 0) {
+			const firstLoadedKey = allKeys.find((key) => layers[key]);
+			visibleKeys = firstLoadedKey ? new Set([firstLoadedKey]) : new Set();
+			if (firstLoadedKey) {
+				layers[firstLoadedKey].layer.setVisible(true);
+				layers[firstLoadedKey].layer.setOpacity(opacities[firstLoadedKey] ?? 1);
+			}
+		} else if (loadedVisibleKeys.length !== visibleKeys.size) {
+			visibleKeys = new Set(loadedVisibleKeys);
+		}
+
+		const firstVisibleKey = [...visibleKeys].find((key) => layers[key]);
+		if (firstVisibleKey) fitToLayer(layers[firstVisibleKey].layer);
 	}
 
 	// ---- Map setup ---------------------------------------------------------------
@@ -495,6 +558,13 @@
 				mapContainer!.style.cursor = '';
 			}
 		});
+
+		map.on('click', (e) => {
+			if (!map) return;
+			const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f);
+			if (!feature || feature.get('lat') == null) return;
+			openCellInspector(Number(feature.get('lat')), Number(feature.get('lon')));
+		});
 	});
 
 	onDestroy(() => {
@@ -508,6 +578,15 @@
 		// Only trigger on job set or window changes — do NOT read jobs/metrics directly
 		// as that would re-run loadAll on every poll even when complete jobs are unchanged.
 		if (jobIds && forecastWindow && map) untrack(loadAll);
+	});
+
+	$effect(() => {
+		const cell = selectedCell;
+		if (cell && jobIds && forecastWindow) {
+			const jobsSnapshot = jobs;
+			const window = forecastWindow;
+			untrack(() => loadCellResults(cell.lat, cell.lon, window, jobsSnapshot));
+		}
 	});
 
 	$effect(() => {
@@ -634,6 +713,18 @@
 				{/if}
 			{/each}
 		</div>
+	{/if}
+
+	{#if selectedCell}
+		<GridCellInspector
+			cell={selectedCell}
+			{forecastWindow}
+			{metrics}
+			results={cellResults}
+			loading={cellLoading}
+			error={cellError}
+			onclose={closeCellInspector}
+		/>
 	{/if}
 </div>
 

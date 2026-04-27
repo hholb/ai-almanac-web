@@ -4,13 +4,15 @@ import {
 	getJob,
 	getJobMetrics,
 	getJobGrid,
+	getJobCell,
 	deleteJob,
 	submitJob,
 	type Job,
 	type JobParams,
 	type JobMetrics,
 	type BboxFilter,
-	type JobGridResponse
+	type JobGridResponse,
+	type JobCellResponse
 } from './api';
 
 // Module-level cache so metrics survive component unmount/remount.
@@ -41,6 +43,23 @@ export async function getCachedJobGrid(
 	if (hit) return hit;
 	const data = await getJobGrid(jobId, model, window, metric);
 	_gridCache.set(key, data);
+	return data;
+}
+
+const _cellCache = new Map<string, JobCellResponse>();
+
+export async function getCachedJobCell(
+	jobId: string,
+	model: string,
+	window: string,
+	lat: number,
+	lon: number
+): Promise<JobCellResponse> {
+	const key = `${jobId}||${model}||${window}||${lat}||${lon}`;
+	const hit = _cellCache.get(key);
+	if (hit) return hit;
+	const data = await getJobCell(jobId, model, window, lat, lon);
+	_cellCache.set(key, data);
 	return data;
 }
 
