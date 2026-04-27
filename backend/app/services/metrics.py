@@ -297,7 +297,9 @@ def compute_job_cell(
             value = float(da.values[lat_idx, lon_idx])
             return None if np.isnan(value) else value
 
-        def delta(model_value: float | None, baseline_value: float | None) -> float | None:
+        def delta(
+            model_value: float | None, baseline_value: float | None
+        ) -> float | None:
             if model_value is None or baseline_value is None:
                 return None
             return model_value - baseline_value
