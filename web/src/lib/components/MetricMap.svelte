@@ -13,8 +13,10 @@
 	import Fill from 'ol/style/Fill';
 	import Stroke from 'ol/style/Stroke';
 	import 'ol/ol.css';
-	import { type JobGridResponse, type Job } from '$lib/api';
-	import { getCachedJobGrid } from '$lib/benchmarks.svelte';
+	import { type JobGridResponse, type Job, type JobCellResponse } from '$lib/api';
+	import { getCachedJobGrid, getCachedJobCell } from '$lib/benchmarks.svelte';
+	import MaeSeriesChart from '$lib/components/MaeSeriesChart.svelte';
+	import YearOnsetHeatmap from '$lib/components/YearOnsetHeatmap.svelte';
 
 	type MetricDef = { value: string; label: string };
 
@@ -82,6 +84,7 @@
 	let visibleKeys = $state<Set<string>>(new Set());
 	let opacities = $state<Record<string, number>>({});
 	let activeRuns = $state<RunDef[]>([]);
+	let loadRequestId = 0;
 
 	let panelCollapsed = $state(false);
 	let fullscreen = $state(false);
@@ -90,6 +93,11 @@
 	let tooltipX = $state(0);
 	let tooltipY = $state(0);
 	let tooltipContent = $state('');
+	let selectedCell = $state<{ lat: number; lon: number } | null>(null);
+	let cellResults = $state<JobCellResponse[]>([]);
+	let cellLoading = $state(false);
+	let cellError = $state<string | null>(null);
+	let cellLoadRequestId = 0;
 
 	// ---- Derived -----------------------------------------------------------------
 
@@ -118,6 +126,52 @@
 
 	function metricLabel(metricValue: string) {
 		return metrics.find((m) => m.value === metricValue)?.label ?? metricValue;
+	}
+
+	function formatValue(value: number | null | undefined, digits = 2): string {
+		return value == null ? '—' : value.toFixed(digits);
+	}
+
+	function formatDelta(value: number | null | undefined, digits = 2): string {
+		if (value == null) return '—';
+		return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`;
+	}
+
+	function metricUnit(metricValue: string): string {
+		if (metricValue === 'false_alarm_rate' || metricValue === 'miss_rate') return 'fraction';
+		return 'days';
+	}
+
+	async function loadCellResults(lat: number, lon: number, window: string, jobsSnapshot: Job[]) {
+		const requestId = ++cellLoadRequestId;
+		cellResults = [];
+		cellError = null;
+		cellLoading = true;
+		try {
+			const results = await Promise.all(
+				jobsSnapshot.map((job) => getCachedJobCell(job.id, job.model_name, window, lat, lon))
+			);
+			if (requestId !== cellLoadRequestId) return;
+			cellResults = results;
+		} catch (e) {
+			if (requestId !== cellLoadRequestId) return;
+			cellError = e instanceof Error ? e.message : 'Failed to load cell metrics';
+		} finally {
+			if (requestId !== cellLoadRequestId) return;
+			cellLoading = false;
+		}
+	}
+
+	function openCellInspector(lat: number, lon: number) {
+		selectedCell = { lat, lon };
+	}
+
+	function closeCellInspector() {
+		cellLoadRequestId++;
+		selectedCell = null;
+		cellResults = [];
+		cellError = null;
+		cellLoading = false;
 	}
 
 	// Find the value in a grid at the lat/lon closest to the given coordinates.
@@ -364,13 +418,21 @@
 
 	async function loadAll() {
 		if (!map) return;
+		const requestId = ++loadRequestId;
+		const previousVisibleKeys = new Set(visibleKeys);
+		const previousOpacities = { ...opacities };
+
 		for (const { layer } of Object.values(layers)) map.removeLayer(layer);
 		layers = {};
 		errors = {};
-		visibleKeys = new Set();
-		opacities = {};
+		loading = new Set();
 
-		if (jobs.length === 0 || metrics.length === 0) return;
+		if (jobs.length === 0 || metrics.length === 0) {
+			activeRuns = [];
+			visibleKeys = new Set();
+			opacities = {};
+			return;
+		}
 
 		// One RunDef per forecast model
 		const modelRuns: RunDef[] = jobs.map((job, i) => ({
@@ -389,13 +451,15 @@
 		activeRuns = [...modelRuns, climRun];
 
 		const firstKey = layerKey(modelRuns[0].jobId, modelRuns[0].modelName, metrics[0].value);
-		visibleKeys = new Set([firstKey]);
-		opacities = { [firstKey]: 1 };
 
 		// Mark all keys as loading
 		const allKeys = activeRuns.flatMap((run) =>
 			metrics.map((m) => layerKey(run.jobId, run.modelName, m.value))
 		);
+		const allKeySet = new Set(allKeys);
+		const preservedVisibleKeys = [...previousVisibleKeys].filter((key) => allKeySet.has(key));
+		visibleKeys = new Set(preservedVisibleKeys.length > 0 ? preservedVisibleKeys : [firstKey]);
+		opacities = Object.fromEntries(allKeys.map((key) => [key, previousOpacities[key] ?? 1]));
 		loading = new Set(allKeys);
 
 		// Fetch all grid data concurrently
@@ -418,6 +482,7 @@
 				})
 			)
 		);
+		if (requestId !== loadRequestId) return;
 
 		// Index climatology data by metric for delta computation
 		const climByMetric: Record<string, JobGridResponse> = {};
@@ -463,7 +528,20 @@
 		errors = newErrors;
 		loading = new Set();
 
-		if (layers[firstKey]) fitToLayer(layers[firstKey].layer);
+		const loadedVisibleKeys = [...visibleKeys].filter((key) => layers[key]);
+		if (loadedVisibleKeys.length === 0) {
+			const firstLoadedKey = allKeys.find((key) => layers[key]);
+			visibleKeys = firstLoadedKey ? new Set([firstLoadedKey]) : new Set();
+			if (firstLoadedKey) {
+				layers[firstLoadedKey].layer.setVisible(true);
+				layers[firstLoadedKey].layer.setOpacity(opacities[firstLoadedKey] ?? 1);
+			}
+		} else if (loadedVisibleKeys.length !== visibleKeys.size) {
+			visibleKeys = new Set(loadedVisibleKeys);
+		}
+
+		const firstVisibleKey = [...visibleKeys].find((key) => layers[key]);
+		if (firstVisibleKey) fitToLayer(layers[firstVisibleKey].layer);
 	}
 
 	// ---- Map setup ---------------------------------------------------------------
@@ -495,6 +573,13 @@
 				mapContainer!.style.cursor = '';
 			}
 		});
+
+		map.on('click', (e) => {
+			if (!map) return;
+			const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f);
+			if (!feature || feature.get('lat') == null) return;
+			openCellInspector(Number(feature.get('lat')), Number(feature.get('lon')));
+		});
 	});
 
 	onDestroy(() => {
@@ -508,6 +593,15 @@
 		// Only trigger on job set or window changes — do NOT read jobs/metrics directly
 		// as that would re-run loadAll on every poll even when complete jobs are unchanged.
 		if (jobIds && forecastWindow && map) untrack(loadAll);
+	});
+
+	$effect(() => {
+		const cell = selectedCell;
+		if (cell && jobIds && forecastWindow) {
+			const jobsSnapshot = jobs;
+			const window = forecastWindow;
+			untrack(() => loadCellResults(cell.lat, cell.lon, window, jobsSnapshot));
+		}
 	});
 
 	$effect(() => {
@@ -633,6 +727,74 @@
 					</div>
 				{/if}
 			{/each}
+		</div>
+	{/if}
+
+	{#if selectedCell}
+		<div class="cell-backdrop" role="presentation" onclick={closeCellInspector}></div>
+		<div
+			class="cell-inspector"
+			role="dialog"
+			aria-modal="true"
+			aria-label="Grid cell metrics"
+			onwheel={(e) => e.stopPropagation()}
+		>
+			<header class="cell-header">
+				<div>
+					<p class="cell-kicker">Grid Cell Inspector</p>
+					<h3>{selectedCell.lat.toFixed(2)}°N, {selectedCell.lon.toFixed(2)}°E</h3>
+					<p class="cell-subtitle">Window {forecastWindow} days, compared with climatology</p>
+				</div>
+				<button class="cell-close" onclick={closeCellInspector} aria-label="Close cell inspector">×</button>
+			</header>
+
+			{#if cellLoading}
+				<div class="cell-state">Loading cell metrics…</div>
+			{:else if cellError}
+				<div class="cell-state error">{cellError}</div>
+			{:else if cellResults.length === 0}
+				<div class="cell-state">No cell metrics available.</div>
+			{:else}
+				<div class="cell-body">
+					{#if cellResults.some((result) => result.mae_series.length > 0)}
+						<MaeSeriesChart results={cellResults} />
+					{/if}
+
+					{#each cellResults as result}
+						<article class="cell-model-card">
+							<div class="cell-model-heading">
+								<div>
+									<p class="cell-model-label">{result.model.toUpperCase()}</p>
+									<p class="cell-grid-note">
+										Nearest grid: {result.lat.toFixed(2)}°N, {result.lon.toFixed(2)}°E
+									</p>
+								</div>
+								<span class="cell-window">Days {result.window}</span>
+							</div>
+
+							<div class="metric-tiles">
+								{#each ['mean_mae', 'false_alarm_rate', 'miss_rate'] as metricValue}
+									{@const item = result.metrics[metricValue]}
+									<div class="metric-tile">
+										<span class="metric-name">{metricLabel(metricValue)}</span>
+										<strong>{formatValue(item?.model, metricValue === 'mean_mae' ? 2 : 3)}</strong>
+										<span class="metric-context">
+											Δ {formatDelta(item?.delta, metricValue === 'mean_mae' ? 2 : 3)}
+											{metricUnit(metricValue)}
+										</span>
+									</div>
+								{/each}
+							</div>
+
+							{#if result.mae_series.length > 0}
+								<YearOnsetHeatmap model={result.model} series={result.mae_series} />
+							{:else}
+								<div class="onset-years empty">No annual onset records were found for this cell.</div>
+							{/if}
+						</article>
+					{/each}
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -1070,5 +1232,230 @@
 	.scale-unit {
 		color: #999;
 		font-size: 0.58rem;
+	}
+
+	/* ---- Cell inspector ---- */
+	.cell-backdrop {
+		position: absolute;
+		inset: 0;
+		z-index: 35;
+		background:
+			radial-gradient(circle at 22% 18%, rgba(238, 247, 242, 0.22), transparent 18rem),
+			linear-gradient(90deg, rgba(9, 22, 35, 0.56), rgba(9, 22, 35, 0.22));
+		backdrop-filter: blur(0.1875rem) saturate(0.8);
+	}
+
+	.cell-inspector {
+		position: absolute;
+		top: 1rem;
+		left: 1rem;
+		bottom: 1rem;
+		z-index: 40;
+		width: min(64vw, calc(100% - 2rem));
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		border: 0.0625rem solid rgba(218, 232, 226, 0.9);
+		border-radius: 1rem;
+		background:
+			linear-gradient(145deg, rgba(255, 255, 255, 0.97), rgba(239, 247, 243, 0.96)),
+			var(--color-surface);
+		box-shadow: 0 1.5rem 4.375rem rgba(3, 14, 25, 0.36);
+		color: #1f2b34;
+	}
+
+	.cell-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.85rem 1rem 0.75rem;
+		border-bottom: 0.0625rem solid rgba(31, 43, 52, 0.12);
+		background:
+			linear-gradient(135deg, rgba(216, 233, 224, 0.95), rgba(255, 255, 255, 0.62)),
+			repeating-linear-gradient(
+				-45deg,
+				rgba(42, 76, 82, 0.04),
+				rgba(42, 76, 82, 0.04) 0.0625rem,
+				transparent 0.0625rem,
+				transparent 0.5rem
+			);
+	}
+
+	.cell-kicker {
+		margin: 0 0 0.25rem;
+		font-size: 0.58rem;
+		font-weight: 800;
+		letter-spacing: 0.16em;
+		text-transform: uppercase;
+		color: #54706f;
+	}
+
+	.cell-header h3 {
+		margin: 0;
+		font-size: 1.08rem;
+		line-height: 1.2;
+		color: #18252b;
+	}
+
+	.cell-subtitle {
+		margin: 0.28rem 0 0;
+		font-size: 0.72rem;
+		color: #627174;
+	}
+
+	.cell-close {
+		width: 1.85rem;
+		height: 1.85rem;
+		border: 0.0625rem solid rgba(31, 43, 52, 0.18);
+		border-radius: 999rem;
+		background: rgba(255, 255, 255, 0.72);
+		color: #223138;
+		font-size: 1.25rem;
+		line-height: 1;
+		cursor: pointer;
+	}
+
+	.cell-close:hover {
+		background: white;
+	}
+
+	.cell-state {
+		margin: 1rem;
+		padding: 1rem;
+		border-radius: 0.6rem;
+		background: rgba(33, 102, 172, 0.08);
+		color: #26485f;
+		font-size: 0.86rem;
+	}
+
+	.cell-state.error {
+		background: rgba(178, 24, 43, 0.08);
+		color: #8d1c2a;
+	}
+
+	.cell-body {
+		display: flex;
+		flex-direction: column;
+		gap: 0.7rem;
+		min-height: 0;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		padding: 0.75rem;
+		scrollbar-color: rgba(84, 112, 111, 0.45) transparent;
+		scrollbar-width: thin;
+	}
+
+	.cell-body::-webkit-scrollbar {
+		width: 0.625rem;
+	}
+
+	.cell-body::-webkit-scrollbar-thumb {
+		background: rgba(84, 112, 111, 0.35);
+		border: 0.1875rem solid transparent;
+		border-radius: 999rem;
+		background-clip: padding-box;
+	}
+
+	.cell-model-card {
+		flex: 0 0 auto;
+		border: 0.0625rem solid rgba(31, 43, 52, 0.1);
+		border-radius: 0.8rem;
+		background: rgba(255, 255, 255, 0.9);
+		box-shadow: 0 0.5rem 1.625rem rgba(20, 40, 50, 0.09);
+		overflow: hidden;
+	}
+
+	.cell-model-heading {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.7rem 0.8rem;
+		border-bottom: 0.0625rem solid rgba(31, 43, 52, 0.1);
+		background: linear-gradient(90deg, rgba(248, 251, 250, 0.98), rgba(233, 242, 238, 0.78));
+	}
+
+	.cell-model-label {
+		margin: 0;
+		font-size: 0.82rem;
+		font-weight: 800;
+		letter-spacing: 0.06em;
+		color: #17252b;
+	}
+
+	.cell-grid-note {
+		margin: 0.2rem 0 0;
+		font-size: 0.66rem;
+		color: #6c7778;
+	}
+
+	.cell-window {
+		flex-shrink: 0;
+		padding: 0.14rem 0.45rem;
+		border-radius: 999rem;
+		background: #edf4f1;
+		color: #45615f;
+		font-size: 0.61rem;
+		font-weight: 700;
+	}
+
+	.metric-tiles {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 0.55rem;
+		padding: 0.65rem 0.75rem;
+	}
+
+	.metric-tile {
+		padding: 0.48rem;
+		border-radius: 0.55rem;
+		background: linear-gradient(180deg, #fbfdfc, #f3f7f5);
+		border: 0.0625rem solid rgba(31, 43, 52, 0.08);
+	}
+
+	.metric-name,
+	.metric-context {
+		display: block;
+		font-size: 0.62rem;
+		color: #687679;
+	}
+
+	.metric-tile strong {
+		display: block;
+		margin: 0.12rem 0;
+		font-family: var(--font-mono);
+		font-size: 0.95rem;
+		color: #16252a;
+	}
+
+	.onset-years.empty {
+		margin: 0 0.75rem 0.75rem;
+		padding: 0.55rem 0.6rem 0.6rem;
+		border: 0.0625rem solid rgba(31, 43, 52, 0.08);
+		border-radius: 0.6rem;
+		background: linear-gradient(180deg, #fbfdfc, #f3f7f5);
+		color: #687679;
+		font-size: 0.72rem;
+	}
+
+	@media (max-width: 56.25rem) {
+		.cell-inspector {
+			width: min(82vw, calc(100% - 2rem));
+		}
+	}
+
+	@media (max-width: 45rem) {
+		.cell-inspector {
+			inset: auto 0 0 0;
+			width: 100%;
+			max-height: 86%;
+			border-radius: 0.9rem 0.9rem 0 0;
+		}
+
+		.metric-tiles {
+			grid-template-columns: 1fr;
+		}
 	}
 </style>

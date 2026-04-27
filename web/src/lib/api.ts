@@ -309,6 +309,32 @@ export type JobGridResponse = {
 	max: number;
 };
 
+export type CellMetricComparison = {
+	model: number | null;
+	baseline: number | null;
+	delta: number | null;
+	unit: string;
+};
+
+export type CellMaePoint = {
+	year: number;
+	model: number | null;
+	baseline: number | null;
+	delta: number | null;
+};
+
+export type JobCellResponse = {
+	job_id: string;
+	model: string;
+	window: string;
+	requested_lat: number;
+	requested_lon: number;
+	lat: number;
+	lon: number;
+	metrics: Record<string, CellMetricComparison>;
+	mae_series: CellMaePoint[];
+};
+
 export type MetricDefinition = {
 	id: string;
 	label: string;
@@ -355,6 +381,17 @@ export async function getJobGrid(
 ): Promise<JobGridResponse> {
 	const params = new URLSearchParams({ model, window, metric });
 	return request<JobGridResponse>(`/jobs/${id}/grid?${params}`);
+}
+
+export async function getJobCell(
+	id: string,
+	model: string,
+	window: string,
+	lat: number,
+	lon: number
+): Promise<JobCellResponse> {
+	const params = new URLSearchParams({ model, window, lat: String(lat), lon: String(lon) });
+	return request<JobCellResponse>(`/jobs/${id}/cell?${params}`);
 }
 
 // ---- Chat --------------------------------------------------------------------
