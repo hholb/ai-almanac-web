@@ -9,11 +9,12 @@
 	import Feature from 'ol/Feature';
 	import Polygon from 'ol/geom/Polygon';
 	import { fromLonLat } from 'ol/proj';
+	import GeoJSON from 'ol/format/GeoJSON';
 	import Style from 'ol/style/Style';
 	import Fill from 'ol/style/Fill';
 	import Stroke from 'ol/style/Stroke';
 	import 'ol/ol.css';
-	import { type JobGridResponse, type Job, type JobCellResponse } from '$lib/api';
+	import { getRegionBoundary, type JobGridResponse, type Job, type JobCellResponse } from '$lib/api';
 	import { getCachedJobGrid, getCachedJobCell } from '$lib/benchmarks.svelte';
 	import GridCellInspector from '$lib/components/GridCellInspector.svelte';
 
@@ -77,13 +78,34 @@
 		deltaMaxAbs?: number;
 		climData?: JobGridResponse; // present on delta layers for tooltip computation
 	};
+
+	type BoundaryLevel = 'adm1';
+	type BoundaryLayerState = {
+		layer: VectorLayer;
+		label: string;
+		source: string;
+	};
+	type BoundaryMetadata = Awaited<ReturnType<typeof getRegionBoundary>>['metadata'];
+
+	const BOUNDARY_LEVELS: Record<BoundaryLevel, { label: string; type: string }> = {
+		adm1: { label: 'Admin 1', type: 'ADM1' }
+	};
+	const boundaryCache = new globalThis.Map<string, BoundaryLayerState>();
+
 	let layers = $state<Record<string, LayerState>>({});
+	let boundaryLayers = $state<Record<BoundaryLevel, BoundaryLayerState | null>>({
+		adm1: null
+	});
+	let boundaryLoading = $state<Set<BoundaryLevel>>(new Set());
+	let boundaryErrors = $state<Partial<Record<BoundaryLevel, string>>>({});
+	let visibleBoundaryLevels = $state<Set<BoundaryLevel>>(new Set());
 	let loading = $state<Set<string>>(new Set());
 	let errors = $state<Record<string, string>>({});
 	let visibleKeys = $state<Set<string>>(new Set());
 	let opacities = $state<Record<string, number>>({});
 	let activeRuns = $state<RunDef[]>([]);
 	let loadRequestId = 0;
+	const boundaryRegion = $derived(jobs[0]?.params?.region);
 
 	let panelCollapsed = $state(false);
 	let fullscreen = $state(false);
@@ -109,6 +131,9 @@
 
 	const visibleLayers = $derived(
 		[...visibleKeys].filter((k) => layers[k]).map((k) => ({ key: k, ...layers[k] }))
+	);
+	const visibleBoundaryLayers = $derived(
+		[...visibleBoundaryLevels].map((level) => boundaryLayers[level]).filter((layer) => layer != null)
 	);
 	const anyLoading = $derived(loading.size > 0);
 
@@ -378,6 +403,95 @@
 		}
 	}
 
+	function boundaryCacheKey(level: BoundaryLevel, region: string) {
+		return `${region.trim().toLowerCase()}||${level}`;
+	}
+
+	function buildBoundaryLayer(
+		level: BoundaryLevel,
+		metadata: BoundaryMetadata,
+		geojson: unknown
+	): BoundaryLayerState {
+		const features = new GeoJSON().readFeatures(geojson, {
+			dataProjection: 'EPSG:4326',
+			featureProjection: 'EPSG:3857'
+		});
+		const strokeColor = 'rgba(32, 42, 67, 0.9)';
+		const haloColor = 'rgba(255, 255, 255, 0.86)';
+		const layer = new VectorLayer({
+			source: new VectorSource({ features }),
+			visible: false,
+			zIndex: 35,
+			style: [
+				new Style({ stroke: new Stroke({ color: haloColor, width: 4 }) }),
+				new Style({
+					stroke: new Stroke({
+						color: strokeColor,
+						width: 1.5
+					})
+				})
+			]
+		});
+		return {
+			layer,
+			label: `${metadata.boundaryName ?? 'Region'} ${metadata.boundaryType ?? BOUNDARY_LEVELS[level].type}`,
+			source: metadata.boundarySource ?? 'geoBoundaries'
+		};
+	}
+
+	async function loadBoundaryLayer(level: BoundaryLevel) {
+		if (!map || boundaryLayers[level] || boundaryLoading.has(level)) return;
+		const region = boundaryRegion;
+		if (!region) {
+			boundaryErrors = { ...boundaryErrors, [level]: 'No geoBoundaries mapping for this region' };
+			return;
+		}
+		const cacheKey = boundaryCacheKey(level, region);
+		const cached = boundaryCache.get(cacheKey);
+		if (cached) {
+			map.addLayer(cached.layer);
+			cached.layer.setVisible(visibleBoundaryLevels.has(level));
+			boundaryLayers = { ...boundaryLayers, [level]: cached };
+			return;
+		}
+
+		boundaryLoading = new Set([...boundaryLoading, level]);
+		boundaryErrors = { ...boundaryErrors, [level]: '' };
+		try {
+			const { metadata, geojson } = await getRegionBoundary(region, level);
+			const state = buildBoundaryLayer(level, metadata, geojson);
+			boundaryCache.set(cacheKey, state);
+			map.addLayer(state.layer);
+			state.layer.setVisible(visibleBoundaryLevels.has(level));
+			boundaryLayers = { ...boundaryLayers, [level]: state };
+		} catch (e) {
+			boundaryErrors = {
+				...boundaryErrors,
+				[level]: e instanceof Error ? e.message : 'Failed to load boundaries'
+			};
+			const next = new Set(visibleBoundaryLevels);
+			next.delete(level);
+			visibleBoundaryLevels = next;
+		} finally {
+			const next = new Set(boundaryLoading);
+			next.delete(level);
+			boundaryLoading = next;
+		}
+	}
+
+	function toggleBoundaryLayer(level: BoundaryLevel) {
+		const next = new Set(visibleBoundaryLevels);
+		if (next.has(level)) {
+			next.delete(level);
+			boundaryLayers[level]?.layer.setVisible(false);
+		} else {
+			next.add(level);
+			boundaryLayers[level]?.layer.setVisible(true);
+			untrack(() => loadBoundaryLayer(level));
+		}
+		visibleBoundaryLevels = next;
+	}
+
 	function toggleLayer(key: string) {
 		const next = new Set(visibleKeys);
 		if (next.has(key)) {
@@ -408,9 +522,15 @@
 		const previousOpacities = { ...opacities };
 
 		for (const { layer } of Object.values(layers)) map.removeLayer(layer);
+		for (const state of Object.values(boundaryLayers)) {
+			if (state) map.removeLayer(state.layer);
+		}
 		layers = {};
+		boundaryLayers = { adm1: null };
 		errors = {};
 		loading = new Set();
+		boundaryErrors = {};
+		boundaryLoading = new Set();
 
 		if (jobs.length === 0 || metrics.length === 0) {
 			activeRuns = [];
@@ -527,6 +647,10 @@
 
 		const firstVisibleKey = [...visibleKeys].find((key) => layers[key]);
 		if (firstVisibleKey) fitToLayer(layers[firstVisibleKey].layer);
+
+		if (Object.values(layers).length > 0) {
+			for (const level of visibleBoundaryLevels) untrack(() => loadBoundaryLayer(level));
+		}
 	}
 
 	// ---- Map setup ---------------------------------------------------------------
@@ -618,6 +742,37 @@
 		</button>
 
 		{#if !panelCollapsed}
+			<div class="boundary-group">
+				<div class="run-header">
+					<span class="run-label">Boundaries</span>
+				</div>
+
+				{#each Object.entries(BOUNDARY_LEVELS) as [level, def]}
+					{@const boundaryLevel = level as BoundaryLevel}
+					{@const isVisible = visibleBoundaryLevels.has(boundaryLevel)}
+					{@const isLoading = boundaryLoading.has(boundaryLevel)}
+					{@const err = boundaryErrors[boundaryLevel]}
+
+					<div class="layer-item" class:visible={isVisible}>
+						<button class="layer-row" onclick={() => toggleBoundaryLayer(boundaryLevel)}>
+							<span class="layer-checkbox" class:checked={isVisible}>
+								{#if isVisible}<span class="checkmark">✓</span>{/if}
+							</span>
+							<span class="layer-label">{def.label}</span>
+							<span class="osm-level-chip">{def.type}</span>
+							{#if isLoading}
+								<span class="layer-spinner"></span>
+							{:else if err}
+								<span class="layer-error" title={err}>✕</span>
+							{/if}
+						</button>
+						{#if err}
+							<p class="boundary-error">{err}</p>
+						{/if}
+					</div>
+				{/each}
+			</div>
+
 			{#each activeRuns as run}
 				<div class="run-group" class:clim-group={run.modelName === 'climatology'}>
 					<div class="run-header">
@@ -711,6 +866,15 @@
 						<span>{vl.data.max.toFixed(2)}</span>
 					</div>
 				{/if}
+			{/each}
+		</div>
+	{/if}
+
+	{#if visibleBoundaryLayers.length > 0}
+		<div class="boundary-attribution">
+			Boundaries: geoBoundaries gbOpen
+			{#each visibleBoundaryLayers as boundaryLayer, i}
+				{#if i === 0}({:else}; {/if}{boundaryLayer.label}{#if i === visibleBoundaryLayers.length - 1}){/if}
 			{/each}
 		</div>
 	{/if}
@@ -869,6 +1033,11 @@
 		background: rgba(0, 0, 0, 0.015);
 	}
 
+	.boundary-group {
+		border-top: 1px solid #e1e5ea;
+		background: rgba(246, 248, 250, 0.88);
+	}
+
 	.run-header {
 		display: flex;
 		align-items: center;
@@ -976,6 +1145,26 @@
 	.layer-error {
 		font-size: 0.7rem;
 		color: #c00;
+	}
+
+	.osm-level-chip {
+		font-size: 0.52rem;
+		font-weight: 700;
+		line-height: 1;
+		color: #596273;
+		background: #eef1f4;
+		border: 1px solid #d8dde5;
+		padding: 0.16rem 0.28rem;
+		border-radius: 0.22rem;
+		flex-shrink: 0;
+	}
+
+	.boundary-error {
+		margin: 0;
+		padding: 0 0.5rem 0.35rem 1.85rem;
+		color: #9b1c1c;
+		font-size: 0.62rem;
+		line-height: 1.25;
 	}
 
 	/* ---- Opacity slider ---- */
@@ -1104,6 +1293,7 @@
 
 	:global(body.figure-lightbox-open) .map-root .layer-panel,
 	:global(body.figure-lightbox-open) .map-root .legend,
+	:global(body.figure-lightbox-open) .map-root .boundary-attribution,
 	:global(body.figure-lightbox-open) .map-root .fullscreen-btn,
 	:global(body.figure-lightbox-open) .map-root .status-overlay,
 	:global(body.figure-lightbox-open) .map-root .tooltip {
@@ -1112,6 +1302,7 @@
 
 	:global(.map-root.fullscreen.obscured-by-lightbox .layer-panel),
 	:global(.map-root.fullscreen.obscured-by-lightbox .legend),
+	:global(.map-root.fullscreen.obscured-by-lightbox .boundary-attribution),
 	:global(.map-root.fullscreen.obscured-by-lightbox .fullscreen-btn),
 	:global(.map-root.fullscreen.obscured-by-lightbox .status-overlay),
 	:global(.map-root.fullscreen.obscured-by-lightbox .tooltip) {
@@ -1161,5 +1352,20 @@
 	.scale-unit {
 		color: #999;
 		font-size: 0.58rem;
+	}
+
+	.boundary-attribution {
+		position: absolute;
+		left: 3rem;
+		bottom: 0.35rem;
+		z-index: 20;
+		max-width: calc(100% - 6rem);
+		padding: 0.18rem 0.4rem;
+		border-radius: 0.25rem;
+		background: rgba(255, 255, 255, 0.86);
+		color: #555;
+		font-size: 0.58rem;
+		line-height: 1.25;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 	}
 </style>
