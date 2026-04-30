@@ -90,11 +90,15 @@ async def get_boundary(region: str, level: str) -> dict[str, Any]:
     """
     iso = _region_iso(region)
     if not iso:
-        raise HTTPException(status_code=404, detail=f"No boundary mapping for region {region!r}")
+        raise HTTPException(
+            status_code=404, detail=f"No boundary mapping for region {region!r}"
+        )
 
     boundary_type = BOUNDARY_LEVELS.get(level.strip().lower())
     if not boundary_type:
-        raise HTTPException(status_code=404, detail=f"Unsupported boundary level {level!r}")
+        raise HTTPException(
+            status_code=404, detail=f"Unsupported boundary level {level!r}"
+        )
 
     cache_key = (iso, boundary_type)
     cached = _BOUNDARY_CACHE.get(cache_key)
@@ -104,7 +108,9 @@ async def get_boundary(region: str, level: str) -> dict[str, Any]:
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         metadata = await _fetch_json(session, _metadata_url(iso, boundary_type))
-        geojson_url = metadata.get("simplifiedGeometryGeoJSON") or metadata.get("gjDownloadURL")
+        geojson_url = metadata.get("simplifiedGeometryGeoJSON") or metadata.get(
+            "gjDownloadURL"
+        )
         if not geojson_url:
             raise HTTPException(
                 status_code=502,
