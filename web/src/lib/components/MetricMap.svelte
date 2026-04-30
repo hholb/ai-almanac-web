@@ -14,7 +14,12 @@
 	import Fill from 'ol/style/Fill';
 	import Stroke from 'ol/style/Stroke';
 	import 'ol/ol.css';
-	import { getRegionBoundary, type JobGridResponse, type Job, type JobCellResponse } from '$lib/api';
+	import {
+		getRegionBoundary,
+		type JobGridResponse,
+		type Job,
+		type JobCellResponse
+	} from '$lib/api';
 	import { getCachedJobGrid, getCachedJobCell } from '$lib/benchmarks.svelte';
 	import GridCellInspector from '$lib/components/GridCellInspector.svelte';
 
@@ -133,7 +138,9 @@
 		[...visibleKeys].filter((k) => layers[k]).map((k) => ({ key: k, ...layers[k] }))
 	);
 	const visibleBoundaryLayers = $derived(
-		[...visibleBoundaryLevels].map((level) => boundaryLayers[level]).filter((layer) => layer != null)
+		[...visibleBoundaryLevels]
+			.map((level) => boundaryLayers[level])
+			.filter((layer) => layer != null)
 	);
 	const anyLoading = $derived(loading.size > 0);
 
@@ -874,7 +881,8 @@
 		<div class="boundary-attribution">
 			Boundaries: geoBoundaries gbOpen
 			{#each visibleBoundaryLayers as boundaryLayer, i}
-				{#if i === 0}({:else}; {/if}{boundaryLayer.label}{#if i === visibleBoundaryLayers.length - 1}){/if}
+				{#if i === 0}({:else};
+				{/if}{boundaryLayer.label}{#if i === visibleBoundaryLayers.length - 1}){/if}
 			{/each}
 		</div>
 	{/if}
