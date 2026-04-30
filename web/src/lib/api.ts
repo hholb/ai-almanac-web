@@ -58,6 +58,12 @@ export async function getRegions() {
 	return request<Region[]>('/regions');
 }
 
+export async function getRegionBoundary(region: string, level: BoundaryLevel) {
+	return request<RegionBoundaryResponse>(
+		`/regions/${encodeURIComponent(region)}/boundaries/${encodeURIComponent(level)}`
+	);
+}
+
 // ---- Datasets ----------------------------------------------------------------
 
 export async function getDatasets() {
@@ -150,6 +156,22 @@ export type Region = {
 	romp_region: string;
 	description: string;
 	has_data: boolean;
+};
+
+export type BoundaryLevel = 'adm1';
+
+export type RegionBoundaryMetadata = {
+	boundaryID: string | null;
+	boundaryName: string | null;
+	boundaryType: string | null;
+	boundarySource: string | null;
+	boundaryLicense: string | null;
+	licenseSource: string | null;
+};
+
+export type RegionBoundaryResponse = {
+	metadata: RegionBoundaryMetadata;
+	geojson: unknown;
 };
 
 export type Dataset = {
