@@ -158,7 +158,7 @@ export type Region = {
 	has_data: boolean;
 };
 
-export type BoundaryLevel = 'adm1';
+export type BoundaryLevel = 'adm1' | 'adm2';
 
 export type RegionBoundaryMetadata = {
 	boundaryID: string | null;
