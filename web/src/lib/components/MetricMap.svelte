@@ -84,22 +84,49 @@
 		climData?: JobGridResponse; // present on delta layers for tooltip computation
 	};
 
-	type BoundaryLevel = 'adm1';
+	type BoundaryLevel = 'adm1' | 'adm2';
 	type BoundaryLayerState = {
 		layer: VectorLayer;
 		label: string;
 		source: string;
 	};
 	type BoundaryMetadata = Awaited<ReturnType<typeof getRegionBoundary>>['metadata'];
+	type BoundaryStyleDef = {
+		label: string;
+		type: string;
+		strokeColor: string;
+		haloColor: string;
+		strokeWidth: number;
+		haloWidth: number;
+		zIndex: number;
+	};
 
-	const BOUNDARY_LEVELS: Record<BoundaryLevel, { label: string; type: string }> = {
-		adm1: { label: 'Admin 1', type: 'ADM1' }
+	const BOUNDARY_LEVELS: Record<BoundaryLevel, BoundaryStyleDef> = {
+		adm1: {
+			label: 'Admin 1',
+			type: 'ADM1',
+			strokeColor: 'rgba(25, 35, 52, 0.96)',
+			haloColor: 'rgba(255, 255, 255, 0.9)',
+			strokeWidth: 2.2,
+			haloWidth: 4.6,
+			zIndex: 38
+		},
+		adm2: {
+			label: 'Admin 2',
+			type: 'ADM2',
+			strokeColor: 'rgba(67, 82, 103, 0.78)',
+			haloColor: 'rgba(255, 255, 255, 0.72)',
+			strokeWidth: 1.5,
+			haloWidth: 2.2,
+			zIndex: 36
+		}
 	};
 	const boundaryCache = new globalThis.Map<string, BoundaryLayerState>();
 
 	let layers = $state<Record<string, LayerState>>({});
 	let boundaryLayers = $state<Record<BoundaryLevel, BoundaryLayerState | null>>({
-		adm1: null
+		adm1: null,
+		adm2: null
 	});
 	let boundaryLoading = $state<Set<BoundaryLevel>>(new Set());
 	let boundaryErrors = $state<Partial<Record<BoundaryLevel, string>>>({});
@@ -423,18 +450,17 @@
 			dataProjection: 'EPSG:4326',
 			featureProjection: 'EPSG:3857'
 		});
-		const strokeColor = 'rgba(32, 42, 67, 0.9)';
-		const haloColor = 'rgba(255, 255, 255, 0.86)';
+		const style = BOUNDARY_LEVELS[level];
 		const layer = new VectorLayer({
 			source: new VectorSource({ features }),
 			visible: false,
-			zIndex: 35,
+			zIndex: style.zIndex,
 			style: [
-				new Style({ stroke: new Stroke({ color: haloColor, width: 4 }) }),
+				new Style({ stroke: new Stroke({ color: style.haloColor, width: style.haloWidth }) }),
 				new Style({
 					stroke: new Stroke({
-						color: strokeColor,
-						width: 1.5
+						color: style.strokeColor,
+						width: style.strokeWidth
 					})
 				})
 			]
@@ -533,7 +559,7 @@
 			if (state) map.removeLayer(state.layer);
 		}
 		layers = {};
-		boundaryLayers = { adm1: null };
+		boundaryLayers = { adm1: null, adm2: null };
 		errors = {};
 		loading = new Set();
 		boundaryErrors = {};

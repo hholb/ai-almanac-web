@@ -35,6 +35,7 @@ REGION_BOUNDARY_ISO = {
 
 BOUNDARY_LEVELS = {
     "adm1": "ADM1",
+    "adm2": "ADM2",
 }
 
 _BOUNDARY_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
